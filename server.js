@@ -63,32 +63,83 @@ app.get("/api/cards", async (req, res) => {
 // ----- Coach (OpenAI) -----
 app.post("/api/coach", async (req, res) => {
   try {
-    const { prompt } = req.body || {};
+    const { prompt, userEmail } = req.body || {};
     if (!prompt) return res.status(400).json({ error: "Missing prompt" });
+
+    // --- (Optional) infer org based on email domain the UI might pass along ---
+    const org = (userEmail && userEmail.split("@")[1] || "").toLowerCase();
+    const isShipWMT = org === "shipwmt.com";
+
+    // --- Lightweight KB search (safe to keep even if table is empty) ---
+    const q = (prompt || "").trim();
+    let contextNotes = [];
+    if (supabase && q) {
+      const { data, error } = await supabase
+        .from("kb_notes")
+        .select("title, content, source, area")
+        .or(`title.ilike.%${q}%,content.ilike.%${q}%,tags.ilike.%${q}%`)
+        .limit(6);
+      if (!error && data) contextNotes = data;
+    }
+
+    const contextBlock = contextNotes.length
+      ? `Context snippets:\n` + contextNotes.map((n,i)=>`[${i+1}] (${n.area}) ${n.source || 'KB'} — ${n.title}\n${n.content}`).join('\n---\n')
+      : `No KB matches found; use only approved best practices and the named sources.`
+
+    // --- Strong guardrails + ShipWMT focus ---
+    const approvedSources = [
+      "Our internal SOPs/KB",
+      "Sales creators: Darren McKee, Jacob Karp, Will Jenkins, Stephen Mathis, Kevin Dorsey",
+      "Industry experts: Craig Fuller, Chris Pickett, Brittain Ladd, Brad Jacobs, Eric Williams, Ken Adamo",
+      "Companies & outlets: FreightWaves/SONAR, DAT, RXO, FedEx, UPS, Walmart, and similar reputable sources"
+    ].join("; ");
+
+    const shipwmtFocus = isShipWMT
+      ? `Primary audience: employees of ShipWMT (shipwmt.com). 
+Tailor guidance to brokerage sales and operations that emphasize: disciplined prospecting, one-lane trials with explicit success criteria, proactive track-and-trace, carrier vetting & scorecards, margin protection, clear escalation paths, and data-backed market context (DAT, SONAR).`
+      : `Primary audience: internal freight brokerage team (private tool).`;
+
+    const styleGuide = `Answer style: concise checklists, concrete scripts/examples, and measurable next steps.
+Always cite snippets used like [1], [2]. If a question requires content outside the approved sources, reply: "I don’t have that in the approved sources."`;
+
+    const systemMsg =
+`You are Fr8Coach, an expert freight brokerage coach.
+${shipwmtFocus}
+
+Approved sources (in priority order): ${approvedSources}.
+${styleGuide}
+
+${contextBlock}
+`;
+
     if (!openai) return res.status(500).json({ error: "OpenAI not configured" });
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-  messages: [
-  {
-    role: "system",
-    content:
-`You are Fr8Coach, an industry leading freight brokerage coach. Focus on guiding employees of shipwmt.com, cater answers to things their company does well.
-Authoritative sources (in order): 1) Our internal SOPs/KB, 2) Ops best practices we have explicitly stored. 3) Content from Freightwaves, SONAR, DAT, CH Robinson, RXO Logistics, 4)Sales creators: Craig Fuller, Ken Adamo, Eric Williams, Darren McKee, Jacob Karp, Will Jenkins, Stephen Mathis, Kevin Dorsey, 
-If a question requires content outside those, say: "I don’t have that in the approved sources." 
-Prefer concise, step-by-step checklists and cite the source names you used at the end.`
-  },
-  { role: "user", content: prompt }
-]
-
-      temperature: 0.3,
-      max_tokens: 300
+      messages: [
+        { role: "system", content: systemMsg },
+        { role: "user", content: prompt }
+      ],
+      temperature: 0.2,
+      max_tokens: 500
     });
 
-    res.json({ reply: completion.choices?.[0]?.message?.content || "No reply" });
+    return res.json({ reply: completion.choices?.[0]?.message?.content || "No reply" });
+
   } catch (e) {
+    const msg = (e?.error?.message || e?.message || "").toLowerCase();
+    if (e?.status === 429 || msg.includes("quota")) {
+      return res.json({
+        reply:
+`(Demo reply – OpenAI quota/rate limit)
+Playbook:
+1) Clarify lane, commodity, timing.
+2) Offer 1-lane trial with explicit success metrics (OTP %, OTIF, tracking cadence).
+3) Confirm next step with date/time and stakeholder.`
+      });
+    }
     console.error("OpenAI error:", e.status || "", e.message || "", e.response?.data || e);
-    res.status(500).json({ error: "OpenAI call failed", detail: e.message || "unknown error" });
+    return res.status(500).json({ error: "OpenAI call failed", detail: e.message || "unknown error" });
   }
 });
 
