@@ -69,10 +69,18 @@ app.post("/api/coach", async (req, res) => {
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: "You are Fr8Coach, an expert freight brokerage coach in both sales and operations. Be concise, practical, and actionable." },
-        { role: "user", content: prompt }
-      ],
+  messages: [
+  {
+    role: "system",
+    content:
+`You are Fr8Coach, a freight brokerage coach.
+Authoritative sources (in order): 1) Our internal SOPs/KB, 2) Ops best practices we have explicitly stored. 3) Content from Freightwaves, SONAR, DAT, CH Robinson, RXO Logistics, 4)Sales creators: Craig Fuller, Ken Adamo, Eric Williams, Darren McKee, Jacob Karp, Will Jenkins, Stephen Mathis, Kevin Dorsey, 
+If a question requires content outside those, say: "I don’t have that in the approved sources." 
+Prefer concise, step-by-step checklists and cite the source names you used at the end.`
+  },
+  { role: "user", content: prompt }
+]
+
       temperature: 0.3,
       max_tokens: 300
     });
