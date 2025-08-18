@@ -48,10 +48,12 @@ app.get("/api/cards", async (req, res) => {
     const type = (req.query.type || "sales").toLowerCase();
     const table = type === "ops" ? "ops_cards" : "sales_cards";
     const { data, error } = await supabase
-      .from(table)
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(5);
+  .from('sales_cards')
+  .select('*')
+  .order('priority', { ascending: false })
+  .order('created_at', { ascending: false })
+  .limit(5);
+
     if (error) throw error;
     res.json({ source: table, cards: data || [] });
   } catch (e) {
