@@ -4,17 +4,31 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Fr8Coach</title>
-  <link rel="stylesheet" href="/styles.css"/>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,sans-serif;background:#f6f7f9;margin:0}
+    .wrap{max-width:900px;margin:30px auto;padding:16px}
+    .card{background:#fff;border:1px solid #e9e9e9;border-radius:14px;padding:16px;margin:12px 0}
+    h1{margin:0 0 8px 0}
+    input,textarea{width:100%;padding:10px;border:1px solid #ddd;border-radius:10px;margin:8px 0}
+    button{padding:10px 14px;border:0;border-radius:10px;background:#111;color:#fff;cursor:pointer}
+    .tab{background:#eee;color:#111;margin-right:8px}
+    .tab.active{background:#111;color:#fff}
+    .err{color:#c00}
+    .hidden{display:none}
+    .pre{white-space:pre-wrap;background:#fafafa;border:1px solid #eee;border-radius:10px;padding:12px}
+  </style>
 </head>
 <body>
   <div class="wrap">
     <h1>Fr8Coach</h1>
+
     <div id="login" class="card">
       <h3>Enter Site Password</h3>
       <input id="pw" type="password" placeholder="Password"/>
       <button id="enter">Enter</button>
       <div id="err" class="err"></div>
     </div>
+
     <div id="app" class="card hidden">
       <div>
         <button class="tab active" data-type="sales">Sales Coach</button>
@@ -23,6 +37,7 @@
       <h3 id="deckTitle">Sales Cards</h3>
       <ul id="cards"></ul>
     </div>
+
     <div id="coach" class="card hidden">
       <h3>Ask the Coach</h3>
       <textarea id="prompt" rows="3" placeholder="e.g., Best opener for cold-calling a produce shipper?"></textarea>
@@ -30,99 +45,61 @@
       <pre id="reply" class="pre"></pre>
     </div>
   </div>
-  <script src="/app.js"></script>
+
+  <script>
+    let PW=null;
+    const $ = (id)=>document.getElementById(id);
+
+    $('enter').onclick=()=>{
+      const v=$('pw').value.trim();
+      if(!v){$('err').textContent='Enter a password';return;}
+      PW=v;
+      $('login').classList.add('hidden');
+      $('app').classList.remove('hidden');
+      $('coach').classList.remove('hidden');
+      load('sales');
+    };
+
+    document.addEventListener('click',(e)=>{
+      if(e.target.classList.contains('tab')){
+        document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+        e.target.classList.add('active');
+        const t=e.target.dataset.type;
+        $('deckTitle').textContent=(t==='ops'?'Ops':'Sales')+' Cards';
+        load(t);
+      }
+    });
+
+    $('ask').onclick=async()=>{
+      const p=$('prompt').value.trim();
+      const out=$('reply');
+      if(!p){out.textContent='Type a question';return;}
+      out.textContent='Thinking...';
+      try{
+        const r=await fetch('/api/coach',{
+          method:'POST',
+          headers:{'Content-Type':'application/json','x-site-password':PW},
+          body:JSON.stringify({prompt:p})
+        });
+        const d=await r.json();
+        out.textContent=d.reply||d.error||'No reply';
+      }catch(e){ out.textContent='Failed to reach coach.'; }
+    };
+
+    async function load(type){
+      const ul=$('cards'); ul.innerHTML='<li>Loading...</li>';
+      try{
+        const r=await fetch(`/api/cards?type=${type}`,{headers:{'x-site-password':PW}});
+        const d=await r.json();
+        if(!d.cards||!d.cards.length){ul.innerHTML='<li>No cards yet.</li>';return;}
+        ul.innerHTML='';
+        d.cards.forEach(c=>{
+          const li=document.createElement('li');
+          li.textContent=`${c.title}: ${c.content}`;
+          ul.appendChild(li);
+        });
+      }catch(e){ ul.innerHTML='<li>Failed to load.</li>'; }
+    }
+  </script>
 </body>
 </html>
-Click Commit new file.
-
-Repeat Add file → Create new file two more times:
-
-public/styles.css
-
-css
-Copy
-body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,sans-serif;background:#f6f7f9;margin:0}
-.wrap{max-width:900px;margin:30px auto;padding:16px}
-.card{background:#fff;border:1px solid #e9e9e9;border-radius:14px;padding:16px;margin:12px 0}
-h1{margin:0 0 8px 0}
-input,textarea{width:100%;padding:10px;border:1px solid #ddd;border-radius:10px;margin:8px 0}
-button{padding:10px 14px;border:0;border-radius:10px;background:#111;color:#fff;cursor:pointer}
-.tab{background:#eee;color:#111;margin-right:8px}
-.tab.active{background:#111;color:#fff}
-.err{color:#c00}
-.hidden{display:none}
-.pre{white-space:pre-wrap;background:#fafafa;border:1px solid #eee;border-radius:10px;padding:12px}
-public/app.js
-
-javascript
-Copy
-let PW=null;
-const $ = (id)=>document.getElementById(id);
-
-$('enter').onclick=()=>{
-  const v=$('pw').value.trim();
-  if(!v){$('err').textContent='Enter a password';return;}
-  PW=v;
-  $('login').classList.add('hidden');
-  $('app').classList.remove('hidden');
-  $('coach').classList.remove('hidden');
-  load('sales');
-};
-
-document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{
-  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
-  b.classList.add('active');
-  const t=b.dataset.type;
-  $('deckTitle').textContent=(t==='ops'?'Ops':'Sales')+' Cards';
-  load(t);
-});
-
-$('ask').onclick=async()=>{
-  const p=$('prompt').value.trim();
-  const out=$('reply');
-  if(!p){out.textContent='Type a question';return;}
-  out.textContent='Thinking...';
-  try{
-    const r=await fetch('/api/coach',{
-      method:'POST',
-      headers:{'Content-Type':'application/json','x-site-password':PW},
-      body:JSON.stringify({prompt:p})
-    });
-    const d=await r.json();
-    out.textContent=d.reply||d.error||'No reply';
-  }catch(e){ out.textContent='Failed to reach coach.'; }
-};
-
-async function load(type){
-  const ul=$('cards'); ul.innerHTML='<li>Loading...</li>';
-  try{
-    const r=await fetch(`/api/cards?type=${type}`,{headers:{'x-site-password':PW}});
-    const d=await r.json();
-    if(!d.cards||!d.cards.length){ul.innerHTML='<li>No cards yet.</li>';return;}
-    ul.innerHTML='';
-    d.cards.forEach(c=>{
-      const li=document.createElement('li');
-      li.textContent=`${c.title}: ${c.content}`;
-      ul.appendChild(li);
-    });
-  }catch(e){ ul.innerHTML='<li>Failed to load.</li>'; }
-}
-Confirm on the repo root page that public/ shows as a folder and contains those three files.
-
-In Render → your service → Manual Deploy → Clear cache & deploy.
-
-Visit https://fr8coach.com → you should now get the password page instead of “Not Found”.
-
-Backup (safer server): add a fallback HTML route
-If you’d like the app to work even when public/index.html is missing, you can add this tiny fallback to server.js:
-
-In GitHub, open server.js → Edit.
-
-Just before the final app.listen(...), add:
-
-js
-Copy
-app.get('/', (req, res) => {
-  res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Fr8Coach</title></head>
-  <body><h1>Fr8Coach</h1><p>Frontend missing. Create <code>public/index.html</code>.</p></body></html>`);
-});
