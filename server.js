@@ -2,6 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 require('dotenv').config();
+const OpenAI = require("openai");
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const OpenAI = require('openai');
 const { createClient } = require('@supabase/supabase-js');
@@ -58,5 +60,29 @@ app.post('/api/coach', async (req,res)=>{
 });
 
 app.get('*',(req,res)=>res.sendFile(path.join(__dirname,'public/index.html')));
+// COACH ENDPOINT
+app.post('/api/coach', async (req, res) => {
+  try {
+    const { prompt } = req.body;
+    if (!prompt) {
+      return res.status(400).json({ error: 'Missing prompt' });
+    }
+
+    // Call OpenAI
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini", // you can use "gpt-4o-mini" or "gpt-4o"
+      messages: [
+        { role: "system", content: "You are Fr8Coach, an expert freight brokerage coach in both sales and operations." },
+        { role: "user", content: prompt }
+      ],
+      max_tokens: 300,
+    });
+
+    res.json({ reply: completion.choices[0].message.content });
+  } catch (e) {
+    console.error("OpenAI error:", e.message, e.response?.data || e);
+    res.status(500).json({ error: "OpenAI call failed", detail: e.message });
+  }
+});
 
 app.listen(PORT, ()=>console.log(`Fr8Coach running on port ${PORT}`));
