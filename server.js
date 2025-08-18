@@ -19,6 +19,8 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY || '';
 
 const openai = OPENAI_API_KEY ? new OpenAI.OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 const supabase = (SUPABASE_URL && SUPABASE_KEY) ? createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+const OpenAI = require('openai');
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 app.use('/api', (req,res,next)=>{
   if(req.headers['x-site-password'] !== SITE_PASSWORD) return res.status(401).json({error:'Unauthorized'});
