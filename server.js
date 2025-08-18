@@ -70,37 +70,73 @@ app.post("/api/coach", async (req, res) => {
     const org = (userEmail && userEmail.split("@")[1] || "").toLowerCase();
     const isShipWMT = org === "shipwmt.com";
 
-    // --- Lightweight KB search (safe to keep even if table is empty) ---
-    const q = (prompt || "").trim();
-    let contextNotes = [];
-    if (supabase && q) {
-      const { data, error } = await supabase
-        .from("kb_notes")
-        .select("title, content, source, area")
-        .or(`title.ilike.%${q}%,content.ilike.%${q}%,tags.ilike.%${q}%`)
-        .limit(6);
-      if (!error && data) contextNotes = data;
-    }
+    // --- Blended KB retrieval with ShipWMT emphasis ---
 
-    const contextBlock = contextNotes.length
-      ? `Context snippets:\n` + contextNotes.map((n,i)=>`[${i+1}] (${n.area}) ${n.source || 'KB'} — ${n.title}\n${n.content}`).join('\n---\n')
-      : `No KB matches found; use only approved best practices and the named sources.`
+const q = (prompt || "").trim();
 
-    // --- Strong guardrails + ShipWMT focus ---
-    const approvedSources = [
-      "Our internal SOPs/KB",
-      "Sales creators: Darren McKee, Jacob Karp, Will Jenkins, Stephen Mathis, Kevin Dorsey",
-      "Industry experts: Craig Fuller, Chris Pickett, Brittain Ladd, Brad Jacobs, Eric Williams, Ken Adamo",
-      "Companies & outlets: FreightWaves/SONAR, DAT, RXO, FedEx, UPS, Walmart, and similar reputable sources"
-    ].join("; ");
+// helper to fetch notes for a topic by keyword
+async function fetchNotes(topic, limit = 6) {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from('kb_notes')
+    .select('topic, content, created_at')
+    .eq('topic', topic)
+    .or(`content.ilike.%${q}%`)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error || !data) return [];
+  return data;
+}
 
-    const shipwmtFocus = isShipWMT
-      ? `Primary audience: employees of ShipWMT (shipwmt.com). 
-Tailor guidance to brokerage sales and operations that emphasize: disciplined prospecting, one-lane trials with explicit success criteria, proactive track-and-trace, carrier vetting & scorecards, margin protection, clear escalation paths, and data-backed market context (DAT, SONAR).`
-      : `Primary audience: internal freight brokerage team (private tool).`;
+// get matches per topic
+const shipwmtMatches = await fetchNotes('ShipWMT Coaching', 6);
+const industryMatches = await fetchNotes('Industry Insights', 6);
 
-    const styleGuide = `Answer style: concise checklists, concrete scripts/examples, and measurable next steps.
-Always cite snippets used like [1], [2]. If a question requires content outside the approved sources, reply: "I don’t have that in the approved sources."`;
+// ensure ShipWMT presence even if no keyword match: take a couple of latest
+let shipwmtFallback = [];
+if (shipwmtMatches.length === 0 && supabase) {
+  const { data } = await supabase
+    .from('kb_notes')
+    .select('topic, content, created_at')
+    .eq('topic', 'ShipWMT Coaching')
+    .order('created_at', { ascending: false })
+    .limit(2);
+  shipwmtFallback = data || [];
+}
+
+// Blend with weighting: favor ShipWMT (first), then Industry
+// Take up to 4 ShipWMT + up to 2 Industry (tweak as you like)
+const blended = [
+  ...shipwmtMatches.slice(0, 4),
+  ...shipwmtFallback.slice(0, Math.max(0, 4 - shipwmtMatches.length)),
+  ...industryMatches.slice(0, 2)
+].filter(Boolean);
+
+// Build compact context
+const contextBlock = blended.length
+  ? `Context snippets (prioritized: ShipWMT Coaching):\n` +
+    blended.map((n,i)=>`[${i+1}] (${n.topic}) ${n.content}`).join('\n---\n')
+  : `No KB matches found; prefer ShipWMT Coaching guidance and approved sources.`;
+
+// Approved sources + ShipWMT focus
+const approvedSources = [
+  "Internal SOPs/KB (ShipWMT Coaching)",
+  "Sales creators: Darren McKee, Jacob Karp, Will Jenkins, Stephen Mathis, Kevin Dorsey",
+  "Industry experts: Craig Fuller, Chris Pickett, Brittain Ladd, Brad Jacobs, Eric Williams, Ken Adamo",
+  "Companies/outlets: FreightWaves/SONAR, DAT, RXO, FedEx, UPS, Walmart (and similar reputable sources)"
+].join("; ");
+
+const systemMsg =
+`You are Fr8Coach, an expert freight brokerage coach for an internal team.
+Emphasize ShipWMT Coaching guidance first, then blend relevant Industry Insights.
+If the question requires anything outside approved sources, say: "I don’t have that in the approved sources."
+Style: concise checklists, concrete scripts, measurable next steps.
+Cite snippets like [1], [2] that correspond to the context block below.
+
+Approved sources (priority): ${approvedSources}
+
+${contextBlock}
+`;
 
     const systemMsg =
 `You are Fr8Coach, an expert freight brokerage coach.
