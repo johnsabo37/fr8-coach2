@@ -47,12 +47,13 @@ app.get("/api/cards", async (req, res) => {
     if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
     const type = (req.query.type || "sales").toLowerCase();
     const table = type === "ops" ? "ops_cards" : "sales_cards";
-    const { data, error } = await supabase
-  .from('sales_cards')
+const { data, error } = await supabase
+  .from(table) // uses 'ops_cards' or 'sales_cards'
   .select('*')
   .order('priority', { ascending: false })
   .order('created_at', { ascending: false })
   .limit(5);
+
 
     if (error) throw error;
     res.json({ source: table, cards: data || [] });
