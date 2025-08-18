@@ -61,89 +61,77 @@ app.get("/api/cards", async (req, res) => {
 });
 
 // ----- Coach (OpenAI) -----
+// ===== REPLACE your entire /api/coach route with this ONE block =====
 app.post("/api/coach", async (req, res) => {
   try {
     const { prompt, userEmail } = req.body || {};
     if (!prompt) return res.status(400).json({ error: "Missing prompt" });
 
-    // --- (Optional) infer org based on email domain the UI might pass along ---
+    // org awareness (optional)
     const org = (userEmail && userEmail.split("@")[1] || "").toLowerCase();
     const isShipWMT = org === "shipwmt.com";
 
-    // --- Blended KB retrieval with ShipWMT emphasis ---
+    const q = (prompt || "").trim();
 
-const q = (prompt || "").trim();
+    // helper: fetch notes for a topic with keyword match
+    async function fetchNotes(topic, limit = 6) {
+      if (!supabase) return [];
+      const { data, error } = await supabase
+        .from('kb_notes')
+        .select('topic, content, created_at')
+        .eq('topic', topic)
+        .or(`content.ilike.%${q}%`)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (error || !data) return [];
+      return data;
+    }
 
-// helper to fetch notes for a topic by keyword
-async function fetchNotes(topic, limit = 6) {
-  if (!supabase) return [];
-  const { data, error } = await supabase
-    .from('kb_notes')
-    .select('topic, content, created_at')
-    .eq('topic', topic)
-    .or(`content.ilike.%${q}%`)
-    .order('created_at', { ascending: false })
-    .limit(limit);
-  if (error || !data) return [];
-  return data;
-}
+    // get matches by topic
+    const shipwmtMatches = await fetchNotes('ShipWMT Coaching', 6);
+    const industryMatches = await fetchNotes('Industry Insights', 6);
 
-// get matches per topic
-const shipwmtMatches = await fetchNotes('ShipWMT Coaching', 6);
-const industryMatches = await fetchNotes('Industry Insights', 6);
+    // ensure ShipWMT flavor is always present
+    let shipwmtFallback = [];
+    if (shipwmtMatches.length === 0 && supabase) {
+      const { data } = await supabase
+        .from('kb_notes')
+        .select('topic, content, created_at')
+        .eq('topic', 'ShipWMT Coaching')
+        .order('created_at', { ascending: false })
+        .limit(2);
+      shipwmtFallback = data || [];
+    }
 
-// ensure ShipWMT presence even if no keyword match: take a couple of latest
-let shipwmtFallback = [];
-if (shipwmtMatches.length === 0 && supabase) {
-  const { data } = await supabase
-    .from('kb_notes')
-    .select('topic, content, created_at')
-    .eq('topic', 'ShipWMT Coaching')
-    .order('created_at', { ascending: false })
-    .limit(2);
-  shipwmtFallback = data || [];
-}
+    // blend with ShipWMT emphasis
+    const blended = [
+      ...shipwmtMatches.slice(0, 4),
+      ...shipwmtFallback.slice(0, Math.max(0, 4 - shipwmtMatches.length)),
+      ...industryMatches.slice(0, 2)
+    ].filter(Boolean);
 
-// Blend with weighting: favor ShipWMT (first), then Industry
-// Take up to 4 ShipWMT + up to 2 Industry (tweak as you like)
-const blended = [
-  ...shipwmtMatches.slice(0, 4),
-  ...shipwmtFallback.slice(0, Math.max(0, 4 - shipwmtMatches.length)),
-  ...industryMatches.slice(0, 2)
-].filter(Boolean);
+    const contextBlock = blended.length
+      ? `Context snippets (prioritized: ShipWMT Coaching):\n` +
+        blended.map((n,i)=>`[${i+1}] (${n.topic}) ${n.content}`).join('\n---\n')
+      : `No KB matches found; prefer ShipWMT Coaching guidance and approved sources.`;
 
-// Build compact context
-const contextBlock = blended.length
-  ? `Context snippets (prioritized: ShipWMT Coaching):\n` +
-    blended.map((n,i)=>`[${i+1}] (${n.topic}) ${n.content}`).join('\n---\n')
-  : `No KB matches found; prefer ShipWMT Coaching guidance and approved sources.`;
+    const approvedSources = [
+      "Internal SOPs/KB (ShipWMT Coaching)",
+      "Sales creators: Darren McKee, Jacob Karp, Will Jenkins, Stephen Mathis, Kevin Dorsey",
+      "Industry experts: Craig Fuller, Chris Pickett, Brittain Ladd, Brad Jacobs, Eric Williams, Ken Adamo",
+      "Companies/outlets: FreightWaves/SONAR, DAT, RXO, FedEx, UPS, Walmart (and similar reputable sources)"
+    ].join("; ");
 
-// Approved sources + ShipWMT focus
-const approvedSources = [
-  "Internal SOPs/KB (ShipWMT Coaching)",
-  "Sales creators: Darren McKee, Jacob Karp, Will Jenkins, Stephen Mathis, Kevin Dorsey",
-  "Industry experts: Craig Fuller, Chris Pickett, Brittain Ladd, Brad Jacobs, Eric Williams, Ken Adamo",
-  "Companies/outlets: FreightWaves/SONAR, DAT, RXO, FedEx, UPS, Walmart (and similar reputable sources)"
-].join("; ");
+    const shipwmtFocus = isShipWMT
+      ? `Primary audience: employees of ShipWMT (shipwmt.com). Emphasize disciplined prospecting, one-lane trials with explicit success criteria, proactive track-and-trace, carrier vetting & scorecards, margin protection, clear escalation, and data-backed context (DAT, SONAR).`
+      : `Primary audience: internal brokerage team. Emphasize ShipWMT Coaching where applicable.`;
 
-const systemMsg =
+    const systemMsg = 
 `You are Fr8Coach, an expert freight brokerage coach for an internal team.
-Emphasize ShipWMT Coaching guidance first, then blend relevant Industry Insights.
-If the question requires anything outside approved sources, say: "I don’t have that in the approved sources."
-Style: concise checklists, concrete scripts, measurable next steps.
-Cite snippets like [1], [2] that correspond to the context block below.
-
-Approved sources (priority): ${approvedSources}
-
-${contextBlock}
-`;
-
-    const systemMsg =
-`You are Fr8Coach, an expert freight brokerage coach.
 ${shipwmtFocus}
-
-Approved sources (in priority order): ${approvedSources}.
-${styleGuide}
+Approved sources (priority): ${approvedSources}
+Style: concise checklists, concrete scripts, measurable next steps.
+Cite snippets like [1], [2] that correspond to the context block.
 
 ${contextBlock}
 `;
@@ -178,6 +166,7 @@ Playbook:
     return res.status(500).json({ error: "OpenAI call failed", detail: e.message || "unknown error" });
   }
 });
+
 
 // ----- Frontend fallback (prevents ENOTDIR/Not Found at /) -----
 app.get("/", (req, res) => {
