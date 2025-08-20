@@ -192,7 +192,12 @@ ${contextBlock}
       max_tokens: 500
     });
 
-    return res.json({ reply: completion.choices?.[0]?.message?.content || "No reply" });
+   // --- build final reply so People Finder always shows up in the output ---
+const modelText = completion.choices?.[0]?.message?.content || "No reply";
+const finalReply = (peopleBlock ? `Contacts & intake:\n${peopleBlock}\n` : "") + modelText;
+
+return res.json({ reply: finalReply });
+
   } catch (e) {
     const msg = (e?.error?.message || e?.message || "").toLowerCase();
     if (e?.status === 429 || msg.includes("quota")) {
