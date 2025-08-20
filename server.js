@@ -123,6 +123,7 @@ app.post('/api/people', async (req, res) => {
 // ----- Coach (OpenAI) -----
 // ===== REPLACE your entire /api/coach route with this ONE block =====
 // ===== REPLACE your entire /api/coach route with this block =====
+// ===== REPLACE everything from app.post("/api/coach"... to its closing }); with this =====
 app.post("/api/coach", async (req, res) => {
   try {
     const { prompt, userEmail } = req.body || {};
@@ -145,6 +146,7 @@ app.post("/api/coach", async (req, res) => {
       if (error || !data) return [];
       return data;
     }
+
     const shipwmtMatches = await fetchNotes('ShipWMT Coaching', 6);
     const industryMatches = await fetchNotes('Industry Insights', 6);
 
@@ -165,12 +167,11 @@ app.post("/api/coach", async (req, res) => {
       ...industryMatches.slice(0, 2)
     ].filter(Boolean);
 
-    // ---- 2) People Finder via SerpAPI (NO extra packages; uses global fetch) ----
+    // ---- 2) People Finder via SerpAPI (uses Node 22 global fetch) ----
     let peopleBlock = "";
     try {
-      // detect patterns like “who should I reach out to at <Company>”
       const m = q.match(/who should i (?:reach out to|contact)[^@]* at ([\w .,&\-()]+)\??/i)
-             || q.match(/contacts? (?:at|for) ([\w .,&\-()]+)\??/i);
+              || q.match(/contacts? (?:at|for) ([\w .,&\-()]+)\??/i);
       const SERPAPI_KEY = process.env.SERPAPI_KEY;
 
       if (m && m[1] && SERPAPI_KEY) {
@@ -189,7 +190,7 @@ app.post("/api/coach", async (req, res) => {
           }
         }
       }
-    } catch (_) { /* keep silent; coach still responds */ }
+    } catch (_) { /* ignore people errors so coach still replies */ }
 
     const contextBlock = (blended.length
       ? `Context snippets (prioritized: ShipWMT Coaching):\n` +
@@ -229,6 +230,25 @@ ${contextBlock}
       temperature: 0.2,
       max_tokens: 500
     });
+
+    return res.json({ reply: completion.choices?.[0]?.message?.content || "No reply" });
+
+  } catch (e) {
+    const msg = (e?.error?.message || e?.message || "").toLowerCase();
+    if (e?.status === 429 || msg.includes("quota")) {
+      return res.json({
+        reply:
+`(Demo reply – OpenAI quota/rate limit)
+Playbook:
+1) Clarify lane, commodity, timing.
+2) Offer 1-lane trial with explicit success metrics (OTP %, OTIF, tracking cadence).
+3) Confirm next step with date/time and stakeholder.`
+      });
+    }
+    console.error("OpenAI error:", e.status || "", e.message || "", e.response?.data || e);
+    return res.status(500).json({ error: "OpenAI call failed", detail: e.message || "unknown error" });
+  }
+});
 
     return res.json({ reply: completion.choices?.[0]?.message?.content || "No reply" });
 
