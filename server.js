@@ -53,6 +53,63 @@ const { data, error } = await supabase
   .order('priority', { ascending: false })
   .order('created_at', { ascending: false })
   .limit(5);
+// People finder via SerpAPI (no scraping behind logins)
+const fetch = (...args) => import('node-fetch').then(({ default: f }) => f(...args));
+
+app.post('/api/people', async (req, res) => {
+  try {
+    if (req.headers["x-site-password"] !== SITE_PASSWORD) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    const { company, roleQuery } = req.body || {};
+    if (!company) return res.status(400).json({ error: "Missing company" });
+
+    const out = { company, query: roleQuery || "", vendor: [], people: [] };
+
+    // Optional: your curated vendor paths from Supabase (if you created `vendor_paths`)
+    try {
+      if (supabase) {
+        const vp = await supabase
+          .from('vendor_paths')
+          .select('company, category, url, email, notes, priority, last_verified')
+          .ilike('company', company.trim())
+          .order('priority', { ascending: false })
+          .order('created_at', { ascending: false })
+          .limit(5);
+        if (!vp.error && vp.data) out.vendor = vp.data;
+      }
+    } catch (_) { /* ignore if table doesn't exist */ }
+
+    // Public people via SerpAPI (Google results)
+    const SERPAPI_KEY = process.env.SERPAPI_KEY;
+    if (!SERPAPI_KEY) {
+      return res.json({ ...out, note: "SERPAPI_KEY missing; add it in Render → Environment." });
+    }
+
+    const q = `site:linkedin.com/in "${company}" ${roleQuery || 'transportation OR logistics OR sourcing'}`;
+    const url = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(q)}&num=10&api_key=${SERPAPI_KEY}`;
+
+    const r = await fetch(url);
+    if (r.ok) {
+      const data = await r.json();
+      const items = (data.organic_results || []).slice(0, 10);
+      out.people = items
+        .filter(i => /linkedin\.com\/in\//i.test(i.link || i.url))
+        .map(i => ({
+          name_or_title: i.title,
+          url: i.link || i.url,
+          snippet: i.snippet || ""
+        }));
+    } else {
+      out.error = `SerpAPI HTTP ${r.status}`;
+    }
+
+    return res.json(out);
+  } catch (e) {
+    console.error('people finder error:', e);
+    return res.status(500).json({ error: 'Lookup failed' });
+  }
+});
 
 
     if (error) throw error;
