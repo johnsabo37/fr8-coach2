@@ -1,4 +1,4 @@
-// server.js (single-folder, Render-ready)
+// server.js (Render-ready, with People Finder diagnostics)
 
 const express = require("express");
 const cors = require("cors");
@@ -108,56 +108,49 @@ app.post("/api/coach", async (req, res) => {
       ...industryMatches.slice(0, 2)
     ].filter(Boolean);
 
-   // ---- 2) People Finder via SerpAPI (more forgiving + visible diagnostics) ----
-let peopleBlock = "";
-try {
-  const SERPAPI_KEY = process.env.SERPAPI_KEY;
+    // ---- 2) People Finder via SerpAPI (forgiving + diagnostics) ----
+    let peopleBlock = "";
+    try {
+      // Try to detect company name from common phrasings
+      let company = null;
+      const m1 =
+        q.match(/who should i (?:reach out to|contact)[^@]* at ([\w .,&\-()]+)\??/i) ||
+        q.match(/contacts? (?:at|for) ([\w .,&\-()]+)\??/i);
+      const m2 = !m1 && q.match(/\bat\s+([A-Za-z][\w .,&\-()]+)\b/);
+      if (m1 && m1[1]) company = m1[1].trim().replace(/\?+$/, "");
+      else if (m2 && m2[1]) company = m2[1].trim().replace(/\?+$/, "");
 
-  // Try hard to detect a company after " at "
-  // Works for: "who should I reach out to at Home Depot..." / "contacts at Walmart" / etc.
-  let company = null;
-  // 1) explicit patterns
-  const m1 = q.match(/who should i (?:reach out to|contact)[^@]* at ([\w .,&\-()]+)\??/i)
-           || q.match(/contacts? (?:at|for) ([\w .,&\-()]+)\??/i);
-  // 2) fallback " at <Company>" anywhere
-  const m2 = !m1 && q.match(/\bat\s+([A-Za-z][\w .,&\-()]+)\b/);
-  if (m1 && m1[1]) company = m1[1].trim().replace(/\?+$/,'');
-  else if (m2 && m2[1]) company = m2[1].trim().replace(/\?+$/,'');
-
-  if (!SERPAPI_KEY) {
-    // make it obvious in the model context so you can see the reason in the reply
-    peopleBlock = `\n[People finder disabled: missing SERPAPI_KEY in server env]\n`;
-  } else if (!company) {
-    peopleBlock = `\n[People finder: no company detected. Try "Who should I reach out to at <Company>..."]\n`;
-  } else {
-    const roleQuery = '("transportation" OR "logistics") (sourcing OR procurement OR carrier OR delivery OR "supply chain") manager';
-    const url = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(
-      `site:linkedin.com/in "${company}" ${roleQuery}`
-    )}&num=10&api_key=${SERPAPI_KEY}`;
-
-    const r = await fetch(url);
-    if (r.ok) {
-      const data = await r.json();
-      const items = (data.organic_results || []).slice(0, 10);
-      const people = items
-        .filter(i => /linkedin\.com\/in\//i.test(i.link || i.url))
-        .map(i => `- ${i.title} — ${i.link || i.url}`);
-      if (people.length) {
-        peopleBlock =
-          `\nPeople finder for "${company}":\n` +
-          `Public profiles (names/titles):\n${people.join('\n')}\n`;
+      if (!SERPAPI_KEY) {
+        peopleBlock = `\n[People finder disabled: missing SERPAPI_KEY in server env]\n`;
+      } else if (!company) {
+        peopleBlock = `\n[People finder: no company detected. Try "Who should I reach out to at <Company>..."]\n`;
       } else {
-        peopleBlock = `\n[People finder: 0 public LinkedIn results for "${company}" with that role query]\n`;
-      }
-    } else {
-      peopleBlock = `\n[People finder HTTP ${r.status}: check SERPAPI key/usage]\n`;
-    }
-  }
-} catch (e) {
-  peopleBlock = `\n[People finder error: ${e?.message || 'unknown'}]\n`;
-}
+        const roleQuery =
+          '("transportation" OR "logistics") (sourcing OR procurement OR carrier OR delivery OR "supply chain") manager';
+        const url = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(
+          `site:linkedin.com/in "${company}" ${roleQuery}`
+        )}&num=10&api_key=${SERPAPI_KEY}`;
 
-      // swallow people errors so the coach still answers
+        const r = await fetch(url);
+        if (r.ok) {
+          const data = await r.json();
+          const items = (data.organic_results || []).slice(0, 10);
+          const people = items
+            .filter((i) => /linkedin\.com\/in\//i.test(i.link || i.url))
+            .map((i) => `- ${i.title} — ${i.link || i.url}`);
+          if (people.length) {
+            peopleBlock =
+              `\nPeople finder for "${company}":\n` +
+              `Public profiles (names/titles):\n${people.join("\n")}\n`;
+          } else {
+            peopleBlock = `\n[People finder: 0 public LinkedIn results for "${company}" with that role query]\n`;
+          }
+        } else {
+          peopleBlock = `\n[People finder HTTP ${r.status}: check SERPAPI key/usage]\n`;
+        }
+      }
+    } catch (e2) {
+      peopleBlock = `\n[People finder error: ${e2?.message || "unknown"}]\n`;
     }
 
     const contextBlock =
