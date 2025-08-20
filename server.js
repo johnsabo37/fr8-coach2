@@ -122,18 +122,17 @@ app.post('/api/people', async (req, res) => {
 
 // ----- Coach (OpenAI) -----
 // ===== REPLACE your entire /api/coach route with this ONE block =====
+// ===== REPLACE your entire /api/coach route with this block =====
 app.post("/api/coach", async (req, res) => {
   try {
     const { prompt, userEmail } = req.body || {};
     if (!prompt) return res.status(400).json({ error: "Missing prompt" });
 
-    // org awareness (optional)
     const org = (userEmail && userEmail.split("@")[1] || "").toLowerCase();
     const isShipWMT = org === "shipwmt.com";
-
     const q = (prompt || "").trim();
 
-    // helper: fetch notes for a topic with keyword match
+    // ---- 1) KB retrieval with ShipWMT emphasis ----
     async function fetchNotes(topic, limit = 6) {
       if (!supabase) return [];
       const { data, error } = await supabase
@@ -146,6 +145,109 @@ app.post("/api/coach", async (req, res) => {
       if (error || !data) return [];
       return data;
     }
+    const shipwmtMatches = await fetchNotes('ShipWMT Coaching', 6);
+    const industryMatches = await fetchNotes('Industry Insights', 6);
+
+    let shipwmtFallback = [];
+    if (shipwmtMatches.length === 0 && supabase) {
+      const { data } = await supabase
+        .from('kb_notes')
+        .select('topic, content, created_at')
+        .eq('topic', 'ShipWMT Coaching')
+        .order('created_at', { ascending: false })
+        .limit(2);
+      shipwmtFallback = data || [];
+    }
+
+    const blended = [
+      ...shipwmtMatches.slice(0, 4),
+      ...shipwmtFallback.slice(0, Math.max(0, 4 - shipwmtMatches.length)),
+      ...industryMatches.slice(0, 2)
+    ].filter(Boolean);
+
+    // ---- 2) People Finder via SerpAPI (NO extra packages; uses global fetch) ----
+    let peopleBlock = "";
+    try {
+      // detect patterns like “who should I reach out to at <Company>”
+      const m = q.match(/who should i (?:reach out to|contact)[^@]* at ([\w .,&\-()]+)\??/i)
+             || q.match(/contacts? (?:at|for) ([\w .,&\-()]+)\??/i);
+      const SERPAPI_KEY = process.env.SERPAPI_KEY;
+
+      if (m && m[1] && SERPAPI_KEY) {
+        const company = m[1].trim();
+        const roleQuery = '("transportation" OR "logistics") (sourcing OR procurement OR carrier OR delivery OR supply chain) manager';
+        const url = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(`site:linkedin.com/in "${company}" ${roleQuery}`)}&num=10&api_key=${SERPAPI_KEY}`;
+        const r = await fetch(url);
+        if (r.ok) {
+          const data = await r.json();
+          const items = (data.organic_results || []).slice(0, 10);
+          const people = items
+            .filter(i => /linkedin\.com\/in\//i.test(i.link || i.url))
+            .map(i => `- ${i.title} — ${i.link || i.url}`);
+          if (people.length) {
+            peopleBlock = `\nPeople finder for "${company}":\nPublic profiles (names/titles):\n${people.join('\n')}\n`;
+          }
+        }
+      }
+    } catch (_) { /* keep silent; coach still responds */ }
+
+    const contextBlock = (blended.length
+      ? `Context snippets (prioritized: ShipWMT Coaching):\n` +
+        blended.map((n,i)=>`[${i+1}] (${n.topic}) ${n.content}`).join('\n---\n')
+      : `No KB matches found; prefer ShipWMT Coaching guidance and approved sources.`)
+      + (peopleBlock ? `\n---\n${peopleBlock}` : "");
+
+    const approvedSources = [
+      "Internal SOPs/KB (ShipWMT Coaching)",
+      "Sales creators: Darren McKee, Jacob Karp, Will Jenkins, Stephen Mathis, Kevin Dorsey",
+      "Industry experts: Craig Fuller, Chris Pickett, Brittain Ladd, Brad Jacobs, Eric Williams, Ken Adamo",
+      "Companies/outlets: FreightWaves/SONAR, DAT, RXO, FedEx, UPS, Walmart (and similar reputable sources)"
+    ].join("; ");
+
+    const shipwmtFocus = isShipWMT
+      ? `Primary audience: employees of ShipWMT (shipwmt.com). Emphasize disciplined prospecting, one-lane trials with explicit success criteria, proactive track-and-trace, carrier vetting & scorecards, margin protection, clear escalation, and data-backed context (DAT, SONAR).`
+      : `Primary audience: internal brokerage team. Emphasize ShipWMT Coaching where applicable.`;
+
+    const systemMsg =
+`You are Fr8Coach, an expert freight brokerage coach for an internal team.
+${shipwmtFocus}
+Approved sources (priority): ${approvedSources}
+Style: concise checklists, concrete scripts, measurable next steps.
+Cite snippets like [1], [2] that correspond to the context block.
+
+${contextBlock}
+`;
+
+    if (!openai) return res.status(500).json({ error: "OpenAI not configured" });
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: systemMsg },
+        { role: "user", content: prompt }
+      ],
+      temperature: 0.2,
+      max_tokens: 500
+    });
+
+    return res.json({ reply: completion.choices?.[0]?.message?.content || "No reply" });
+
+  } catch (e) {
+    const msg = (e?.error?.message || e?.message || "").toLowerCase();
+    if (e?.status === 429 || msg.includes("quota")) {
+      return res.json({
+        reply:
+`(Demo reply – OpenAI quota/rate limit)
+Playbook:
+1) Clarify lane, commodity, timing.
+2) Offer 1-lane trial with explicit success metrics (OTP %, OTIF, tracking cadence).
+3) Confirm next step with date/time and stakeholder.`
+      });
+    }
+    console.error("OpenAI error:", e.status || "", e.message || "", e.response?.data || e);
+    return res.status(500).json({ error: "OpenAI call failed", detail: e.message || "unknown error" });
+  }
+});
 
     // get matches by topic
     const shipwmtMatches = await fetchNotes('ShipWMT Coaching', 6);
