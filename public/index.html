@@ -57,9 +57,7 @@
     .chat {
       background:#0f1730; border:1px solid #334; border-radius:12px; padding:12px;
     }
-    .chat-controls {
-      display:flex; gap:10px; align-items:center; margin-bottom:8px;
-    }
+    .chat-controls { margin-bottom:8px; }
     .messages {
       max-height: 480px; overflow:auto; padding:6px; display:flex; flex-direction:column; gap:12px;
       background:#0c1326; border:1px solid #26304f; border-radius:8px;
@@ -75,6 +73,7 @@
     .composer textarea {
       flex:1; min-height: 110px; resize: vertical; line-height: 1.4;
     }
+    .composer-buttons { display:flex; flex-direction:column; gap:10px; }
   </style>
 </head>
 <body>
@@ -97,7 +96,6 @@
     <div class="topbar">
       <strong>Fr8Coach</strong>
       <span class="spacer"></span>
-      <button id="clearChatTop" class="secondary" title="Clear conversation history">Clear Conversation</button>
       <button id="changePw" class="danger" title="Clear saved password to lock the site">Lock</button>
     </div>
 
@@ -114,7 +112,6 @@
       <h2>Coach</h2>
       <div class="chat">
         <div class="chat-controls">
-          <button id="clearChat" class="secondary">Clear Conversation</button>
           <span id="status" class="muted"></span>
         </div>
 
@@ -122,9 +119,9 @@
 
         <div class="composer">
           <textarea id="q" placeholder="Ask a question or follow up…"></textarea>
-          <div style="display:flex; flex-direction:column; gap:10px;">
+          <div class="composer-buttons">
             <button id="ask">Send</button>
-            <button id="refresh">Refresh Cards</button>
+            <button id="clearChat" class="secondary">Clear Conversation</button>
           </div>
         </div>
       </div>
@@ -246,10 +243,8 @@
     const messagesEl = document.getElementById('messages');
     const qEl = document.getElementById('q');
     const askBtn = document.getElementById('ask');
-    const refreshBtn = document.getElementById('refresh');
-    const statusEl = document.getElementById('status');
     const clearBtn = document.getElementById('clearChat');
-    const clearTopBtn = document.getElementById('clearChatTop');
+    const statusEl = document.getElementById('status');
 
     function appendMessage(role, text) {
       const row = document.createElement('div');
@@ -296,7 +291,6 @@
     }
 
     clearBtn.onclick = clearConversation;
-    clearTopBtn.onclick = clearConversation;
 
     askBtn.onclick = async () => {
       const prompt = qEl.value.trim();
@@ -309,7 +303,6 @@
       statusEl.textContent = 'Thinking…';
 
       try {
-        // Send recent history to backend for context
         const hist = historyFromDom(8);
         const data = await api('/api/coach', {
           method: 'POST',
@@ -324,8 +317,6 @@
         statusEl.textContent = 'Failed.';
       }
     };
-
-    refreshBtn.onclick = loadCards;
   </script>
 </body>
 </html>
