@@ -46,6 +46,8 @@
     .spacer { flex: 1; }
     .danger { background:#5b2230; border-color:#7a2d3d; }
     .danger:hover { background:#6a2a39; }
+    .secondary { background:#263960; border-color:#2b4a86; }
+    .secondary:hover { background:#2c4573; }
 
     /* Cards */
     .cards { display:grid; grid-template-columns: repeat(auto-fit,minmax(260px,1fr)); gap:12px; margin:12px 0 28px; }
@@ -54,6 +56,9 @@
     /* Chat */
     .chat {
       background:#0f1730; border:1px solid #334; border-radius:12px; padding:12px;
+    }
+    .chat-controls {
+      display:flex; gap:10px; align-items:center; margin-bottom:8px;
     }
     .messages {
       max-height: 480px; overflow:auto; padding:6px; display:flex; flex-direction:column; gap:12px;
@@ -92,6 +97,7 @@
     <div class="topbar">
       <strong>Fr8Coach</strong>
       <span class="spacer"></span>
+      <button id="clearChatTop" class="secondary" title="Clear conversation history">Clear Conversation</button>
       <button id="changePw" class="danger" title="Clear saved password to lock the site">Lock</button>
     </div>
 
@@ -107,6 +113,11 @@
 
       <h2>Coach</h2>
       <div class="chat">
+        <div class="chat-controls">
+          <button id="clearChat" class="secondary">Clear Conversation</button>
+          <span id="status" class="muted"></span>
+        </div>
+
         <div id="messages" class="messages"></div>
 
         <div class="composer">
@@ -116,7 +127,6 @@
             <button id="refresh">Refresh Cards</button>
           </div>
         </div>
-        <div id="status" class="muted" style="margin-top:6px;"></div>
       </div>
     </div>
   </section>
@@ -238,6 +248,8 @@
     const askBtn = document.getElementById('ask');
     const refreshBtn = document.getElementById('refresh');
     const statusEl = document.getElementById('status');
+    const clearBtn = document.getElementById('clearChat');
+    const clearTopBtn = document.getElementById('clearChatTop');
 
     function appendMessage(role, text) {
       const row = document.createElement('div');
@@ -275,6 +287,16 @@
         (hist || []).forEach(m => appendMessage(m.role === 'assistant' ? 'bot' : 'user', m.content));
       } catch {}
     }
+
+    function clearConversation() {
+      messagesEl.innerHTML = '';
+      localStorage.removeItem('FR8COACH_CHAT');
+      statusEl.textContent = 'Conversation cleared.';
+      qEl.focus();
+    }
+
+    clearBtn.onclick = clearConversation;
+    clearTopBtn.onclick = clearConversation;
 
     askBtn.onclick = async () => {
       const prompt = qEl.value.trim();
