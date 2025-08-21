@@ -1,4 +1,4 @@
-// server.js (CommonJS, Render-ready, cards + email-aware coach + people finder)
+// server.js (CommonJS, pre-email: password-gated APIs, cards working, optional People Finder)
 
 const express = require("express");
 const cors = require("cors");
@@ -10,17 +10,17 @@ const OpenAI = require("openai");
 
 // ----- Config from env -----
 const PORT = process.env.PORT || 10000;
-const SITE_PASSWORD = process.env.SITE_PASSWORD || "";
+const SITE_PASSWORD = process.env.SITE_PASSWORD || "";   // required in x-site-password header
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_KEY = process.env.SUPABASE_KEY || "";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
-const SERPAPI_KEY = process.env.SERPAPI_KEY || "";
+const SERPAPI_KEY = process.env.SERPAPI_KEY || "";       // optional: for People Finder
 
 // ----- Clients -----
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
+app.use(express.static(path.join(__dirname, "public"))); // serves your existing frontend
 
 const supabase = (SUPABASE_URL && SUPABASE_KEY)
   ? createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -33,7 +33,7 @@ const openai = OPENAI_API_KEY
 // ----- Health -----
 app.get("/api/ping", (req, res) => res.json({ ok: true, message: "pong" }));
 
-// ----- Simple auth gate for all /api routes -----
+// ----- Simple auth gate for all /api routes (password required) -----
 app.use("/api", (req, res, next) => {
   if (req.path === "/ping") return next(); // allow ping without password
   if (req.headers["x-site-password"] !== SITE_PASSWORD) {
@@ -65,31 +65,15 @@ app.get("/api/cards", async (req, res) => {
 });
 
 // ----- Coach (OpenAI) -----
-// Collects userEmail from body, maps to org label (for KB topic), blends KB, runs People Finder, and always prints contacts on top.
+// No email domain logic. Uses KB topics "ShipWMT Coaching" + "Industry Insights" by default.
+// Includes optional People Finder via SerpAPI based on the question text.
 app.post("/api/coach", async (req, res) => {
   try {
-    const { prompt, userEmail } = req.body || {};
+    const { prompt } = req.body || {};
     if (!prompt) return res.status(400).json({ error: "Missing prompt" });
-
-    // === Domain → Org mapping (edit/extend as you like) ===
-    const ORG_MAP = {
-      "shipwmt.com":    { label: "ShipWMT" },
-      "ntgfreight.com": { label: "NTG" },
-      "rxo.com":        { label: "RXO" },
-      "fedex.com":      { label: "FedEx" },
-      "ups.com":        { label: "UPS" },
-      "walmart.com":    { label: "Walmart" }
-    };
-
-    const domain = (userEmail && userEmail.split("@")[1] || "").toLowerCase();
-    const orgCfg = ORG_MAP[domain] || null;
-    const ORG_LABEL  = orgCfg?.label || "ShipWMT";
-    const ORG_DOMAIN = domain || "shipwmt.com";
-    const isOrg      = !!orgCfg;
-
     const q = (prompt || "").trim();
 
-    // ---- 1) KB retrieval with org emphasis ----
+    // 1) KB retrieval
     async function fetchNotes(topic, limit = 6) {
       if (!supabase) return [];
       const { data, error } = await supabase
@@ -103,28 +87,27 @@ app.post("/api/coach", async (req, res) => {
       return data;
     }
 
-    const primaryTopic     = `${ORG_LABEL} Coaching`;
-    const primaryMatches   = await fetchNotes(primaryTopic, 6);
-    const industryMatches  = await fetchNotes("Industry Insights", 6);
+    const shipMatches     = await fetchNotes("ShipWMT Coaching", 6);
+    const industryMatches = await fetchNotes("Industry Insights", 6);
 
-    let primaryFallback = [];
-    if (primaryMatches.length === 0 && supabase) {
+    let shipFallback = [];
+    if (shipMatches.length === 0 && supabase) {
       const { data } = await supabase
         .from("kb_notes")
         .select("topic, content, created_at")
-        .eq("topic", primaryTopic)
+        .eq("topic", "ShipWMT Coaching")
         .order("created_at", { ascending: false })
         .limit(2);
-      primaryFallback = data || [];
+      shipFallback = data || [];
     }
 
     const blended = [
-      ...primaryMatches.slice(0, 4),
-      ...primaryFallback.slice(0, Math.max(0, 4 - primaryMatches.length)),
+      ...shipMatches.slice(0, 4),
+      ...shipFallback.slice(0, Math.max(0, 4 - shipMatches.length)),
       ...industryMatches.slice(0, 2)
     ].filter(Boolean);
 
-    // ---- 2) People Finder via SerpAPI (forgiving + diagnostics + company cleanup) ----
+    // 2) People Finder (optional). Pulls public LinkedIn profile snippets via SerpAPI if question includes "at <Company>".
     let peopleBlock = "";
     try {
       function cleanCompany(raw) {
@@ -157,18 +140,14 @@ app.post("/api/coach", async (req, res) => {
       else if (m2 && m2[1]) company = cleanCompany(m2[1]);
 
       if (!SERPAPI_KEY) {
-        peopleBlock = `\n[People finder disabled: missing SERPAPI_KEY in server env]\n`;
-      } else if (!company) {
-        peopleBlock = `\n[People finder: no company detected. Try "Who should I reach out to at <Company>..."]\n`;
-      } else {
+        // silently skip if you prefer; leaving diagnostic helps when testing
+        // peopleBlock = `\n[People finder disabled: missing SERPAPI_KEY]\n`;
+      } else if (company) {
         const roleQuery =
           '("transportation" OR "logistics") (sourcing OR procurement OR carrier OR delivery OR "supply chain") manager';
-
-        // primary query
         const q1 = `site:linkedin.com/in "${company}" ${roleQuery}`;
         const url1 = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(q1)}&num=10&api_key=${SERPAPI_KEY}`;
         const r1 = await fetch(url1);
-
         let people = [];
         if (r1.ok) {
           const d1 = await r1.json();
@@ -177,11 +156,9 @@ app.post("/api/coach", async (req, res) => {
             .filter(i => /linkedin\.com\/in\//i.test(i.link || i.url))
             .map(i => `- ${i.title} — ${i.link || i.url}`);
         }
-
-        // fallback without leading "The "
         if (people.length === 0) {
-          const altCo = company.replace(/^The\s+/i, "");
-          const q2 = `site:linkedin.com/in "${altCo}" ${roleQuery}`;
+          const alt = company.replace(/^The\s+/i, "");
+          const q2 = `site:linkedin.com/in "${alt}" ${roleQuery}`;
           const url2 = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(q2)}&num=10&api_key=${SERPAPI_KEY}`;
           const r2 = await fetch(url2);
           if (r2.ok) {
@@ -192,36 +169,29 @@ app.post("/api/coach", async (req, res) => {
               .map(i => `- ${i.title} — ${i.link || i.url}`);
           }
         }
-
-        peopleBlock = people.length
-          ? `\nPeople finder for "${company}":\nPublic profiles (names/titles):\n${people.join("\n")}\n`
-          : `\n[People finder: 0 public LinkedIn results for "${company}" with that role query]\n`;
+        if (people.length) {
+          peopleBlock = `\nContacts & intake — ${company}:\n${people.join("\n")}\n\n`;
+        }
       }
-    } catch (e2) {
-      peopleBlock = `\n[People finder error: ${e2?.message || "unknown"}]\n`;
-    }
+    } catch (_) { /* ignore people errors so coach still replies */ }
 
-    // ---- System message with org focus ----
+    // 3) System message
     const approvedSources = [
-      `Internal SOPs/KB (${ORG_LABEL} Coaching)`,
+      "Internal SOPs/KB (ShipWMT Coaching)",
       "Sales creators: Darren McKee, Jacob Karp, Will Jenkins, Stephen Mathis, Kevin Dorsey",
       "Industry experts: Craig Fuller, Chris Pickett, Brittain Ladd, Brad Jacobs, Eric Williams, Ken Adamo",
-      "Companies/outlets: FreightWaves/SONAR, DAT, RXO, FedEx, UPS, Walmart (and similar reputable sources)"
+      "Companies/outlets: FreightWaves/SONAR, DAT, RXO, FedEx, UPS, Walmart"
     ].join("; ");
-
-    const orgFocus = isOrg
-      ? `Primary audience: employees of ${ORG_LABEL} (${ORG_DOMAIN}). Emphasize disciplined prospecting, one-lane trials with explicit success criteria, proactive track-and-trace, carrier vetting & scorecards, margin protection, clear escalation, and data-backed context (DAT, SONAR).`
-      : `Primary audience: internal brokerage team. Emphasize ${ORG_LABEL} Coaching where applicable.`;
 
     const contextBlock =
       (blended.length
-        ? `Context snippets (prioritized: ${ORG_LABEL} Coaching):\n` +
+        ? `Context snippets (prioritized: ShipWMT Coaching):\n` +
           blended.map((n, i) => `[${i + 1}] (${n.topic}) ${n.content}`).join("\n---\n")
-        : `No KB matches found; prefer ${ORG_LABEL} Coaching guidance and approved sources.`) +
+        : `No KB matches found; prefer ShipWMT Coaching guidance and approved sources.`) +
       (peopleBlock ? `\n---\n${peopleBlock}` : "");
 
     const systemMsg = `You are Fr8Coach, an expert freight brokerage coach for an internal team.
-${orgFocus}
+Primary audience: internal brokerage team. Emphasize ShipWMT Coaching where applicable.
 Approved sources (priority): ${approvedSources}
 Style: concise checklists, concrete scripts, measurable next steps.
 Cite snippets like [1], [2] that correspond to the context block.
@@ -241,11 +211,10 @@ ${contextBlock}
       max_tokens: 500
     });
 
-    // Always surface People Finder section
     const modelText = completion.choices?.[0]?.message?.content || "No reply";
-    const finalReply = (peopleBlock ? `Contacts & intake:\n${peopleBlock}\n` : "") + modelText;
+    // Prepend contacts if present so they always render
+    const finalReply = (peopleBlock ? peopleBlock : "") + modelText;
     return res.json({ reply: finalReply });
-
   } catch (e) {
     const msg = (e?.error?.message || e?.message || "").toLowerCase();
     if (e?.status === 429 || msg.includes("quota")) {
