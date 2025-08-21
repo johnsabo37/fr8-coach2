@@ -1,4 +1,5 @@
-// server.js (CommonJS, history-aware + company inference from history for People Finder)
+// server.js (CommonJS, Render-ready, password-gated APIs, cards, history-aware coach + optional People Finder)
+// Company focus: NTG (www.ntgfreight.com)
 
 const express = require("express");
 const cors = require("cors");
@@ -64,7 +65,7 @@ app.get("/api/cards", async (req, res) => {
   }
 });
 
-// ----- Helper: company detection from text -----
+// ----- Helper: company detection from text (for People Finder) -----
 function normalizeCompany(c) {
   if (!c) return "";
   let s = c.trim().replace(/[?.,;:]+$/g, "");
@@ -111,7 +112,7 @@ function detectCompany(prompt, history) {
     }
   }
 
-  // 3) As a last resort, allow detection from assistant text (user might ask “and who at that company?”)
+  // 3) As a last resort, scan assistant text too
   for (const m of items) {
     if (!m || !m.content) continue;
     const c = detectCompanyFromText(m.content);
@@ -122,13 +123,14 @@ function detectCompany(prompt, history) {
 
 // ----- Coach (OpenAI) -----
 // Accepts: { prompt, history? [{role:'user'|'assistant', content:string}] }
+// Focus: NTG Coaching
 app.post("/api/coach", async (req, res) => {
   try {
     const { prompt, history } = req.body || {};
     if (!prompt) return res.status(400).json({ error: "Missing prompt" });
     const q = (prompt || "").trim();
 
-    // 1) KB retrieval
+    // 1) KB retrieval (prioritize NTG Coaching, then Industry Insights)
     async function fetchNotes(topic, limit = 6) {
       if (!supabase) return [];
       const { data, error } = await supabase
@@ -142,27 +144,27 @@ app.post("/api/coach", async (req, res) => {
       return data;
     }
 
-    const shipMatches     = await fetchNotes("ShipWMT Coaching", 6);
+    const ntgMatches     = await fetchNotes("NTG Coaching", 6);
     const industryMatches = await fetchNotes("Industry Insights", 6);
 
-    let shipFallback = [];
-    if (shipMatches.length === 0 && supabase) {
+    let ntgFallback = [];
+    if (ntgMatches.length === 0 && supabase) {
       const { data } = await supabase
         .from("kb_notes")
         .select("topic, content, created_at")
-        .eq("topic", "ShipWMT Coaching")
+        .eq("topic", "NTG Coaching")
         .order("created_at", { ascending: false })
         .limit(2);
-      shipFallback = data || [];
+      ntgFallback = data || [];
     }
 
     const blended = [
-      ...shipMatches.slice(0, 4),
-      ...shipFallback.slice(0, Math.max(0, 4 - shipMatches.length)),
+      ...ntgMatches.slice(0, 4),
+      ...ntgFallback.slice(0, Math.max(0, 4 - ntgMatches.length)),
       ...industryMatches.slice(0, 2)
     ].filter(Boolean);
 
-    // 2) People Finder (optional) — now uses company from prompt OR history
+    // 2) People Finder (optional) — uses company from prompt OR history
     let peopleBlock = "";
     try {
       const company = detectCompany(prompt, history);
@@ -196,9 +198,9 @@ app.post("/api/coach", async (req, res) => {
       // If no SERPAPI_KEY or no company found, skip silently.
     } catch (_) { /* ignore people errors so coach still replies */ }
 
-    // 3) System message
+    // 3) System message (NTG-focused)
     const approvedSources = [
-      "Internal SOPs/KB (ShipWMT Coaching)",
+      "Internal SOPs/KB (NTG Coaching)",
       "Sales creators: Darren McKee, Jacob Karp, Will Jenkins, Stephen Mathis, Kevin Dorsey",
       "Industry experts: Craig Fuller, Chris Pickett, Brittain Ladd, Brad Jacobs, Eric Williams, Ken Adamo",
       "Companies/outlets: FreightWaves/SONAR, DAT, RXO, FedEx, UPS, Walmart"
@@ -206,13 +208,13 @@ app.post("/api/coach", async (req, res) => {
 
     const contextBlock =
       (blended.length
-        ? `Context snippets (prioritized: ShipWMT Coaching):\n` +
+        ? `Context snippets (prioritized: NTG Coaching):\n` +
           blended.map((n, i) => `[${i + 1}] (${n.topic}) ${n.content}`).join("\n---\n")
-        : `No KB matches found; prefer ShipWMT Coaching guidance and approved sources.`) +
+        : `No KB matches found; prefer NTG Coaching guidance and approved sources.`) +
       (peopleBlock ? `\n---\n${peopleBlock}` : "");
 
-    const systemMsg = `You are Fr8Coach, an expert freight brokerage coach for an internal team.
-Primary audience: internal brokerage team. Emphasize ShipWMT Coaching where applicable.
+    const systemMsg = `You are Fr8Coach, an expert freight brokerage coach for the internal NTG team (ntgfreight.com).
+Emphasize: disciplined prospecting & sequencing, one-lane trials with explicit success criteria, proactive track-and-trace, carrier vetting & scorecards, margin protection, clear escalation/SOPs, and data-backed context (DAT, SONAR).
 Approved sources (priority): ${approvedSources}
 Style: concise checklists, concrete scripts, measurable next steps.
 Cite snippets like [1], [2] that correspond to the context block.
