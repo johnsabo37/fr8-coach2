@@ -1,4 +1,4 @@
-// server.js (CommonJS, Render-ready, password-gated APIs, cards, history-aware coach + optional People Finder)
+// server.js (CommonJS, history-aware + company inference from history for People Finder)
 
 const express = require("express");
 const cors = require("cors");
@@ -64,10 +64,64 @@ app.get("/api/cards", async (req, res) => {
   }
 });
 
+// ----- Helper: company detection from text -----
+function normalizeCompany(c) {
+  if (!c) return "";
+  let s = c.trim().replace(/[?.,;:]+$/g, "");
+  const STOPS = [" to ", " for ", " about ", " regarding ", " re ", " in ", " on "];
+  for (const stop of STOPS) {
+    const idx = s.toLowerCase().indexOf(stop.trim());
+    if (idx > 0) {
+      const re = new RegExp(`\\s${stop.trim()}\\s`, "i");
+      s = s.split(re)[0];
+      break;
+    }
+  }
+  if (/^home\s*depot$/i.test(s)) s = "The Home Depot";
+  if (/^walmart$/i.test(s))     s = "Walmart";
+  if (/^ups$/i.test(s))         s = "UPS";
+  if (/^fedex$/i.test(s))       s = "FedEx";
+  return s.trim();
+}
+
+function detectCompanyFromText(text) {
+  if (!text) return null;
+  const q = String(text);
+  const m1 =
+    q.match(/who should i (?:reach out to|contact)[^@]* at ([\w .,&\-()]+)\??/i) ||
+    q.match(/contacts? (?:at|for) ([\w .,&\-()]+)\??/i) ||
+    q.match(/(?:get set up|set up).* at ([\w .,&\-()]+)\??/i);
+  const m2 = !m1 && q.match(/\bat\s+([A-Za-z][\w .,&\-()]+)\b/);
+  const raw = m1?.[1] || m2?.[1];
+  return raw ? normalizeCompany(raw) : null;
+}
+
+function detectCompany(prompt, history) {
+  // 1) Try current prompt
+  let company = detectCompanyFromText(prompt);
+  if (company) return company;
+
+  // 2) Walk recent history (most recent last), prefer user turns
+  const items = Array.isArray(history) ? history.slice().reverse() : [];
+  for (const m of items) {
+    if (!m || !m.content) continue;
+    if (m.role !== "assistant") {
+      const c = detectCompanyFromText(m.content);
+      if (c) return c;
+    }
+  }
+
+  // 3) As a last resort, allow detection from assistant text (user might ask “and who at that company?”)
+  for (const m of items) {
+    if (!m || !m.content) continue;
+    const c = detectCompanyFromText(m.content);
+    if (c) return c;
+  }
+  return null;
+}
+
 // ----- Coach (OpenAI) -----
 // Accepts: { prompt, history? [{role:'user'|'assistant', content:string}] }
-// Uses KB topics "ShipWMT Coaching" + "Industry Insights" by default.
-// Includes optional People Finder via SerpAPI if a company is detected in the question.
 app.post("/api/coach", async (req, res) => {
   try {
     const { prompt, history } = req.body || {};
@@ -108,70 +162,38 @@ app.post("/api/coach", async (req, res) => {
       ...industryMatches.slice(0, 2)
     ].filter(Boolean);
 
-    // 2) People Finder (optional). Pulls public LinkedIn profile snippets via SerpAPI if question includes "at <Company>".
+    // 2) People Finder (optional) — now uses company from prompt OR history
     let peopleBlock = "";
     try {
-      function cleanCompany(raw) {
-        if (!raw) return "";
-        let c = raw.trim();
-        c = c.replace(/[?.,;:]+$/g, "");
-        const STOPS = [" to ", " for ", " about ", " regarding ", " re ", " in ", " on "];
-        for (const s of STOPS) {
-          const idx = c.toLowerCase().indexOf(s.trim());
-          if (idx > 0) {
-            const re = new RegExp(`\\s${s.trim()}\\s`, "i");
-            c = c.split(re)[0];
-            break;
-          }
-        }
-        if (/^home\s*depot$/i.test(c)) c = "The Home Depot";
-        if (/^walmart$/i.test(c))     c = "Walmart";
-        if (/^ups$/i.test(c))         c = "UPS";
-        if (/^fedex$/i.test(c))       c = "FedEx";
-        return c.trim();
-      }
-
-      let company = null;
-      const m1 =
-        q.match(/who should i (?:reach out to|contact)[^@]* at ([\w .,&\-()]+)\??/i) ||
-        q.match(/contacts? (?:at|for) ([\w .,&\-()]+)\??/i);
-      const m2 = !m1 && q.match(/\bat\s+([A-Za-z][\w .,&\-()]+)\b/);
-
-      if (m1 && m1[1]) company = cleanCompany(m1[1]);
-      else if (m2 && m2[1]) company = cleanCompany(m2[1]);
-
+      const company = detectCompany(prompt, history);
       if (SERPAPI_KEY && company) {
         const roleQuery =
           '("transportation" OR "logistics") (sourcing OR procurement OR carrier OR delivery OR "supply chain") manager';
-        const q1 = `site:linkedin.com/in "${company}" ${roleQuery}`;
-        const url1 = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(q1)}&num=10&api_key=${SERPAPI_KEY}`;
-        const r1 = await fetch(url1);
-        let people = [];
-        if (r1.ok) {
+
+        async function querySerp(companyName) {
+          const q1 = `site:linkedin.com/in "${companyName}" ${roleQuery}`;
+          const url1 = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(q1)}&num=10&api_key=${SERPAPI_KEY}`;
+          const r1 = await fetch(url1);
+          if (!r1.ok) return [];
           const d1 = await r1.json();
           const items1 = (d1.organic_results || []).slice(0, 10);
-          people = items1
+          return items1
             .filter(i => /linkedin\.com\/in\//i.test(i.link || i.url))
             .map(i => `- ${i.title} — ${i.link || i.url}`);
         }
-        if (people.length === 0) {
+
+        let people = await querySerp(company);
+        if (!people.length) {
           const alt = company.replace(/^The\s+/i, "");
-          const q2 = `site:linkedin.com/in "${alt}" ${roleQuery}`;
-          const url2 = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(q2)}&num=10&api_key=${SERPAPI_KEY}`;
-          const r2 = await fetch(url2);
-          if (r2.ok) {
-            const d2 = await r2.json();
-            const items2 = (d2.organic_results || []).slice(0, 10);
-            people = items2
-              .filter(i => /linkedin\.com\/in\//i.test(i.link || i.url))
-              .map(i => `- ${i.title} — ${i.link || i.url}`);
+          if (alt && alt !== company) {
+            people = await querySerp(alt);
           }
         }
         if (people.length) {
           peopleBlock = `\nContacts & intake — ${company}:\n${people.join("\n")}\n\n`;
         }
       }
-      // if no SERPAPI_KEY or no company detected, we quietly skip
+      // If no SERPAPI_KEY or no company found, skip silently.
     } catch (_) { /* ignore people errors so coach still replies */ }
 
     // 3) System message
@@ -222,7 +244,6 @@ ${contextBlock}
     });
 
     const modelText = completion.choices?.[0]?.message?.content || "No reply";
-    // Prepend contacts if present so they always render
     const finalReply = (peopleBlock ? peopleBlock : "") + modelText;
     return res.json({ reply: finalReply });
   } catch (e) {
