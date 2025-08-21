@@ -5,23 +5,27 @@
   <title>Fr8Coach</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
+    :root { color-scheme: dark; }
     body{font-family:system-ui,Arial,sans-serif;background:#0b1220;color:#e6edf3;margin:0}
+    a{color:#6ab0ff}
     .wrap{max-width:980px;margin:80px auto 120px;padding:0 16px}
     h1{font-size:28px;margin:0 0 12px}
+    h2{font-size:18px;margin:20px 0 8px}
     .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin:12px 0 28px}
-    .card{background:#111a2e;border:1px solid #223; border-radius:12px;padding:12px}
+    .card{background:#111a2e;border:1px solid #223;border-radius:12px;padding:12px}
     .loginbar{position:fixed;inset:auto 0 0 0;background:#0b1220;padding:10px;border-top:1px solid #223;display:flex;gap:8px;align-items:center;z-index:9999}
     input,button,textarea{border-radius:8px;border:1px solid #334;background:#0f1730;color:#e6edf3}
     input,button{padding:8px}
-    textarea{width:100%;min-height:100px;padding:10px}
+    textarea{width:100%;min-height:120px;padding:10px}
     .btn{cursor:pointer}
     .out{white-space:pre-wrap;background:#0f1730;border:1px solid #334;border-radius:8px;padding:12px;margin-top:10px}
+    .muted{opacity:.8;font-size:12px}
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1>Fr8Coach</h1>
-    <p>Ask the coach anything. Results are tailored by your <strong>business email domain</strong>.</p>
+    <p class="muted">Protected by a site password. Enter it below once, then refresh cards or ask the coach.</p>
 
     <h2>Sales Cards</h2>
     <div id="sales" class="cards"></div>
@@ -30,93 +34,120 @@
     <div id="ops" class="cards"></div>
 
     <h2>Coach</h2>
-    <textarea id="q" placeholder="e.g., Who should I reach out to at The Home Depot about transportation sourcing?"></textarea>
-    <button id="ask" class="btn">Ask</button>
-    <div id="reply" class="out"></div>
+    <textarea id="q" placeholder="e.g., Draft a first-meeting agenda for a 1-lane trial with a big-box retailer."></textarea>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+      <button id="ask" class="btn">Ask</button>
+      <button id="refresh" class="btn">Refresh Cards</button>
+      <span id="status" class="muted"></span>
+    </div>
+    <div id="reply" class="out" style="margin-top:12px"></div>
   </div>
 
+  <!-- Password bar (no email) -->
   <div class="loginbar">
-    <strong>Fr8Coach Login</strong>
-    <input id="fc-email" type="email" placeholder="your.name@company.com" style="flex:1;min-width:260px" />
-    <input id="fc-pw" type="password" placeholder="Site password" style="width:180px" />
+    <strong>Site Password</strong>
+    <input id="fc-pw" type="password" placeholder="Enter site password" style="flex:1;min-width:260px" />
     <button id="fc-save" class="btn">Save</button>
+    <button id="fc-clear" class="btn" title="Clear saved password">Clear</button>
   </div>
 
   <script>
-    // ---- Persist email + password
-    const emailEl = document.getElementById('fc-email');
+    // ---- Persist ONLY the site password (no email) ----
     const pwEl    = document.getElementById('fc-pw');
     const saveBtn = document.getElementById('fc-save');
+    const clearBtn= document.getElementById('fc-clear');
+    const statusEl= document.getElementById('status');
 
     // restore saved
-    emailEl.value = localStorage.getItem('FR8COACH_EMAIL') || '';
-    pwEl.value    = localStorage.getItem('FR8COACH_PW') || '';
+    const savedPW = localStorage.getItem('FR8COACH_PW') || '';
+    if (savedPW) pwEl.value = savedPW;
 
     saveBtn.onclick = () => {
-      const email = (emailEl.value || '').trim();
-      const pw    = (pwEl.value || '').trim();
-      if (!email.includes('@')) return alert('Enter a valid business email.');
+      const pw = (pwEl.value || '').trim();
       if (!pw) return alert('Enter the site password.');
-      localStorage.setItem('FR8COACH_EMAIL', email);
       localStorage.setItem('FR8COACH_PW', pw);
-      window.USER_EMAIL = email; window.PW = pw; // expose for convenience
-      alert('Saved.');
-      loadCards(); // refresh cards in case header was missing
+      alert('Password saved.');
+      loadCards();
+    };
+    clearBtn.onclick = () => {
+      localStorage.removeItem('FR8COACH_PW');
+      pwEl.value = '';
+      alert('Saved password cleared.');
     };
 
-    // helper to fetch JSON with password header
+    // ---- Helper: fetch JSON with password header ----
     async function api(path, opts = {}) {
       const pw = localStorage.getItem('FR8COACH_PW') || '';
       const headers = Object.assign({'Content-Type':'application/json','x-site-password': pw}, opts.headers||{});
       const r = await fetch(path, Object.assign({}, opts, { headers }));
-      if (!r.ok) throw new Error('HTTP '+r.status);
+      if (!r.ok) {
+        const txt = await r.text().catch(()=> '');
+        throw new Error(`HTTP ${r.status}${txt ? ' – ' + txt : ''}`);
+      }
       return r.json();
     }
 
-    // ---- Load Sales & Ops cards
+    // ---- Load Sales & Ops cards ----
     async function loadCards() {
+      const salesEl = document.getElementById('sales');
+      const opsEl   = document.getElementById('ops');
+      salesEl.innerHTML = '<div class="card">Loading…</div>';
+      opsEl.innerHTML   = '<div class="card">Loading…</div>';
       try {
-        const sales = await api('/api/cards?type=sales');
-        const ops   = await api('/api/cards?type=ops');
+        const [sales, ops] = await Promise.all([
+          api('/api/cards?type=sales'),
+          api('/api/cards?type=ops')
+        ]);
         renderCards('sales', sales.cards || []);
-        renderCards('ops', ops.cards || []);
+        renderCards('ops',   ops.cards   || []);
+        statusEl.textContent = '';
       } catch (e) {
         console.error(e);
-        document.getElementById('sales').innerHTML = '<div class="card">Failed to load sales cards</div>';
-        document.getElementById('ops').innerHTML   = '<div class="card">Failed to load ops cards</div>';
+        salesEl.innerHTML = '<div class="card">Failed to load sales cards (check password)</div>';
+        opsEl.innerHTML   = '<div class="card">Failed to load ops cards (check password)</div>';
+        statusEl.textContent = 'Unauthorized? Make sure the site password is saved.';
       }
     }
 
     function renderCards(id, cards) {
       const el = document.getElementById(id);
       el.innerHTML = (cards && cards.length)
-        ? cards.map(c => `<div class="card"><div><strong>${c.title || c.header || 'Card'}</strong></div><div>${c.body || c.content || ''}</div></div>`).join('')
+        ? cards.map(c => `
+            <div class="card">
+              <div><strong>${escapeHtml(c.title || c.header || 'Card')}</strong></div>
+              <div>${escapeHtml(c.body || c.content || '')}</div>
+            </div>
+          `).join('')
         : '<div class="card">No cards yet</div>';
     }
 
-    // ---- Ask coach
+    function escapeHtml(s){return String(s)
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;")
+      .replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;")}
+
+    document.getElementById('refresh').onclick = loadCards;
+
+    // ---- Ask coach (no email sent) ----
     document.getElementById('ask').onclick = async () => {
       const prompt = document.getElementById('q').value.trim();
-      const email  = localStorage.getItem('FR8COACH_EMAIL') || '';
-      const pw     = localStorage.getItem('FR8COACH_PW') || '';
+      const pw = localStorage.getItem('FR8COACH_PW') || '';
       if (!pw) return alert('Save the site password first.');
-      if (!email) return alert('Save your business email first.');
       const out = document.getElementById('reply');
-      out.textContent = 'Thinking...';
+      out.textContent = 'Thinking…';
+      statusEl.textContent = '';
       try {
-        const r = await fetch('/api/coach', {
+        const data = await api('/api/coach', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-site-password': pw },
-          body: JSON.stringify({ prompt, userEmail: email })
+          body: JSON.stringify({ prompt })
         });
-        const data = await r.json();
         out.textContent = (data && data.reply) ? data.reply : JSON.stringify(data, null, 2);
       } catch (e) {
         out.textContent = 'Error: ' + e.message;
+        if (/401/.test(e.message)) statusEl.textContent = 'Unauthorized. Check the saved site password.';
       }
     };
 
-    // load on first view
+    // Initial load
     loadCards();
   </script>
 </body>
