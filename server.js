@@ -1,4 +1,4 @@
-// server.js (Render-ready, with People Finder diagnostics)
+// server.js (Render-ready, with People Finder diagnostics + output)
 
 const express = require("express");
 const cors = require("cors");
@@ -108,17 +108,43 @@ app.post("/api/coach", async (req, res) => {
       ...industryMatches.slice(0, 2)
     ].filter(Boolean);
 
-    // ---- 2) People Finder via SerpAPI (forgiving + diagnostics) ----
+    // ---- 2) People Finder via SerpAPI (forgiving + diagnostics + company cleanup) ----
     let peopleBlock = "";
     try {
-      // Try to detect company name from common phrasings
+      function cleanCompany(raw) {
+        if (!raw) return "";
+        let c = raw.trim();
+
+        // strip trailing punctuation
+        c = c.replace(/[?.,;:]+$/g, "");
+
+        // remove trailing clauses often added after company
+        const STOPS = [" to ", " for ", " about ", " regarding ", " re ", " in ", " on "];
+        for (const s of STOPS) {
+          const idx = c.toLowerCase().indexOf(s.trim());
+          if (idx > 0) {
+            const re = new RegExp(`\\s${s.trim()}\\s`, "i");
+            c = c.split(re)[0];
+            break;
+          }
+        }
+
+        // normalize a few common brand aliases
+        if (/^home\s*depot$/i.test(c)) c = "The Home Depot";
+        if (/^walmart$/i.test(c)) c = "Walmart";
+        if (/^ups$/i.test(c)) c = "UPS";
+        if (/^fedex$/i.test(c)) c = "FedEx";
+        return c.trim();
+      }
+
       let company = null;
       const m1 =
         q.match(/who should i (?:reach out to|contact)[^@]* at ([\w .,&\-()]+)\??/i) ||
         q.match(/contacts? (?:at|for) ([\w .,&\-()]+)\??/i);
       const m2 = !m1 && q.match(/\bat\s+([A-Za-z][\w .,&\-()]+)\b/);
-      if (m1 && m1[1]) company = m1[1].trim().replace(/\?+$/, "");
-      else if (m2 && m2[1]) company = m2[1].trim().replace(/\?+$/, "");
+
+      if (m1 && m1[1]) company = cleanCompany(m1[1]);
+      else if (m2 && m2[1]) company = cleanCompany(m2[1]);
 
       if (!SERPAPI_KEY) {
         peopleBlock = `\n[People finder disabled: missing SERPAPI_KEY in server env]\n`;
@@ -127,26 +153,42 @@ app.post("/api/coach", async (req, res) => {
       } else {
         const roleQuery =
           '("transportation" OR "logistics") (sourcing OR procurement OR carrier OR delivery OR "supply chain") manager';
-        const url = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(
-          `site:linkedin.com/in "${company}" ${roleQuery}`
-        )}&num=10&api_key=${SERPAPI_KEY}`;
 
-        const r = await fetch(url);
-        if (r.ok) {
-          const data = await r.json();
-          const items = (data.organic_results || []).slice(0, 10);
-          const people = items
-            .filter((i) => /linkedin\.com\/in\//i.test(i.link || i.url))
-            .map((i) => `- ${i.title} — ${i.link || i.url}`);
-          if (people.length) {
-            peopleBlock =
-              `\nPeople finder for "${company}":\n` +
-              `Public profiles (names/titles):\n${people.join("\n")}\n`;
-          } else {
-            peopleBlock = `\n[People finder: 0 public LinkedIn results for "${company}" with that role query]\n`;
+        // primary query
+        const q1 = `site:linkedin.com/in "${company}" ${roleQuery}`;
+        const url1 = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(q1)}&num=10&api_key=${SERPAPI_KEY}`;
+        const r1 = await fetch(url1);
+
+        let people = [];
+        if (r1.ok) {
+          const d1 = await r1.json();
+          const items1 = (d1.organic_results || []).slice(0, 10);
+          people = items1
+            .filter(i => /linkedin\.com\/in\//i.test(i.link || i.url))
+            .map(i => `- ${i.title} — ${i.link || i.url}`);
+        }
+
+        // fallback without leading "The "
+        if (people.length === 0) {
+          const altCo = company.replace(/^The\s+/i, "");
+          const q2 = `site:linkedin.com/in "${altCo}" ${roleQuery}`;
+          const url2 = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(q2)}&num=10&api_key=${SERPAPI_KEY}`;
+          const r2 = await fetch(url2);
+          if (r2.ok) {
+            const d2 = await r2.json();
+            const items2 = (d2.organic_results || []).slice(0, 10);
+            people = items2
+              .filter(i => /linkedin\.com\/in\//i.test(i.link || i.url))
+              .map(i => `- ${i.title} — ${i.link || i.url}`);
           }
+        }
+
+        if (people.length) {
+          peopleBlock =
+            `\nPeople finder for "${company}":\n` +
+            `Public profiles (names/titles):\n${people.join("\n")}\n`;
         } else {
-          peopleBlock = `\n[People finder HTTP ${r.status}: check SERPAPI key/usage]\n`;
+          peopleBlock = `\n[People finder: 0 public LinkedIn results for "${company}" with that role query]\n`;
         }
       }
     } catch (e2) {
@@ -192,12 +234,11 @@ ${contextBlock}
       max_tokens: 500
     });
 
-   // --- build final reply so People Finder always shows up in the output ---
-const modelText = completion.choices?.[0]?.message?.content || "No reply";
-const finalReply = (peopleBlock ? `Contacts & intake:\n${peopleBlock}\n` : "") + modelText;
+    // Always surface People Finder section in the reply
+    const modelText = completion.choices?.[0]?.message?.content || "No reply";
+    const finalReply = (peopleBlock ? `Contacts & intake:\n${peopleBlock}\n` : "") + modelText;
 
-return res.json({ reply: finalReply });
-
+    return res.json({ reply: finalReply });
   } catch (e) {
     const msg = (e?.error?.message || e?.message || "").toLowerCase();
     if (e?.status === 429 || msg.includes("quota")) {
