@@ -1,159 +1,123 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta charset="utf-8" />
   <title>Fr8Coach</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,sans-serif;background:#f6f7f9;margin:0}
-    .wrap{max-width:900px;margin:30px auto;padding:16px}
-    .card{background:#fff;border:1px solid #e9e9e9;border-radius:14px;padding:16px;margin:12px 0}
-    h1{margin:0 0 8px 0}
-    input,textarea{width:100%;padding:10px;border:1px solid #ddd;border-radius:10px;margin:8px 0}
-    button{padding:10px 14px;border:0;border-radius:10px;background:#111;color:#fff;cursor:pointer}
-    .tab{background:#eee;color:#111;margin-right:8px}
-    .tab.active{background:#111;color:#fff}
-    .err{color:#c00}
-    .hidden{display:none}
-    .pre{white-space:pre-wrap;background:#fafafa;border:1px solid #eee;border-radius:10px;padding:12px}
+    body{font-family:system-ui,Arial,sans-serif;background:#0b1220;color:#e6edf3;margin:0}
+    .wrap{max-width:980px;margin:80px auto 120px;padding:0 16px}
+    h1{font-size:28px;margin:0 0 12px}
+    .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin:12px 0 28px}
+    .card{background:#111a2e;border:1px solid #223; border-radius:12px;padding:12px}
+    .loginbar{position:fixed;inset:auto 0 0 0;background:#0b1220;padding:10px;border-top:1px solid #223;display:flex;gap:8px;align-items:center;z-index:9999}
+    input,button,textarea{border-radius:8px;border:1px solid #334;background:#0f1730;color:#e6edf3}
+    input,button{padding:8px}
+    textarea{width:100%;min-height:100px;padding:10px}
+    .btn{cursor:pointer}
+    .out{white-space:pre-wrap;background:#0f1730;border:1px solid #334;border-radius:8px;padding:12px;margin-top:10px}
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1>Fr8Coach</h1>
+    <p>Ask the coach anything. Results are tailored by your <strong>business email domain</strong>.</p>
 
-    <div id="login" class="card">
-      <h3>Enter Site Password</h3>
-      <input id="pw" type="password" placeholder="Password"/>
-      <button id="enter">Enter</button>
-      <div id="err" class="err"></div>
-    </div>
+    <h2>Sales Cards</h2>
+    <div id="sales" class="cards"></div>
 
-    <div id="app" class="card hidden">
-      <div>
-        <button class="tab active" data-type="sales">Sales Coach</button>
-        <button class="tab" data-type="ops">Ops Coach</button>
-      </div>
-      <h3 id="deckTitle">Sales Cards</h3>
-      <ul id="cards"></ul>
-    </div>
+    <h2>Ops Cards</h2>
+    <div id="ops" class="cards"></div>
 
-    <div id="coach" class="card hidden">
-      <h3>Ask the Coach</h3>
-      <textarea id="prompt" rows="3" placeholder="e.g., Best opener for cold-calling a produce shipper?"></textarea>
-      <button id="ask">Ask</button>
-      <pre id="reply" class="pre"></pre>
-    </div>
+    <h2>Coach</h2>
+    <textarea id="q" placeholder="e.g., Who should I reach out to at The Home Depot about transportation sourcing?"></textarea>
+    <button id="ask" class="btn">Ask</button>
+    <div id="reply" class="out"></div>
+  </div>
+
+  <div class="loginbar">
+    <strong>Fr8Coach Login</strong>
+    <input id="fc-email" type="email" placeholder="your.name@company.com" style="flex:1;min-width:260px" />
+    <input id="fc-pw" type="password" placeholder="Site password" style="width:180px" />
+    <button id="fc-save" class="btn">Save</button>
   </div>
 
   <script>
-    let PW=null;
-    const $ = (id)=>document.getElementById(id);
+    // ---- Persist email + password
+    const emailEl = document.getElementById('fc-email');
+    const pwEl    = document.getElementById('fc-pw');
+    const saveBtn = document.getElementById('fc-save');
 
-    $('enter').onclick=()=>{
-      const v=$('pw').value.trim();
-      if(!v){$('err').textContent='Enter a password';return;}
-      PW=v;
-      $('login').classList.add('hidden');
-      $('app').classList.remove('hidden');
-      $('coach').classList.remove('hidden');
-      load('sales');
+    // restore saved
+    emailEl.value = localStorage.getItem('FR8COACH_EMAIL') || '';
+    pwEl.value    = localStorage.getItem('FR8COACH_PW') || '';
+
+    saveBtn.onclick = () => {
+      const email = (emailEl.value || '').trim();
+      const pw    = (pwEl.value || '').trim();
+      if (!email.includes('@')) return alert('Enter a valid business email.');
+      if (!pw) return alert('Enter the site password.');
+      localStorage.setItem('FR8COACH_EMAIL', email);
+      localStorage.setItem('FR8COACH_PW', pw);
+      window.USER_EMAIL = email; window.PW = pw; // expose for convenience
+      alert('Saved.');
+      loadCards(); // refresh cards in case header was missing
     };
 
-    document.addEventListener('click',(e)=>{
-      if(e.target.classList.contains('tab')){
-        document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
-        e.target.classList.add('active');
-        const t=e.target.dataset.type;
-        $('deckTitle').textContent=(t==='ops'?'Ops':'Sales')+' Cards';
-        load(t);
-      }
-    });
-
-    $('ask').onclick=async()=>{
-      const p=$('prompt').value.trim();
-      const out=$('reply');
-      if(!p){out.textContent='Type a question';return;}
-      out.textContent='Thinking...';
-      try{
-        const r=await fetch('/api/coach',{
-          method:'POST',
-          headers:{'Content-Type':'application/json','x-site-password':PW},
-          body:JSON.stringify({prompt:p})
-        });
-        const d=await r.json();
-        out.textContent=d.reply||d.error||'No reply';
-      }catch(e){ out.textContent='Failed to reach coach.'; }
-    };
-
-    async function load(type){
-      const ul=$('cards'); ul.innerHTML='<li>Loading...</li>';
-      try{
-        const r=await fetch(`/api/cards?type=${type}`,{headers:{'x-site-password':PW}});
-        const d=await r.json();
-        if(!d.cards||!d.cards.length){ul.innerHTML='<li>No cards yet.</li>';return;}
-        ul.innerHTML='';
-        d.cards.forEach(c=>{
-          const li=document.createElement('li');
-          li.textContent=`${c.title}: ${c.content}`;
-          ul.appendChild(li);
-        });
-      }catch(e){ ul.innerHTML='<li>Failed to load.</li>'; }
-    }
-  </script>
-<script>
-  // --- Minimal "business email" login helper ---
-  (function () {
-    // Allow hard refresh without losing login
-    const savedEmail = localStorage.getItem("FR8COACH_EMAIL") || "";
-    const savedPW    = localStorage.getItem("FR8COACH_PW") || "";
-
-    // 1) Inject a lightweight login bar if not already present
-    if (!document.getElementById("fc-login-bar")) {
-      const bar = document.createElement("div");
-      bar.id = "fc-login-bar";
-      bar.style.cssText = "position:fixed;inset:auto 0 0 0;background:#0b1220;color:#fff;padding:10px;display:flex;gap:8px;align-items:center;z-index:9999;font:14px system-ui";
-      bar.innerHTML = `
-        <strong style="margin-right:8px">Fr8Coach Login</strong>
-        <input id="fc-email" type="email" placeholder="your.name@company.com" value="${savedEmail}" style="flex:1;min-width:260px;padding:6px;border-radius:6px;border:1px solid #334;outline:none" />
-        <input id="fc-pw" type="password" placeholder="Site password" value="${savedPW}" style="width:160px;padding:6px;border-radius:6px;border:1px solid #334;outline:none" />
-        <button id="fc-save" style="padding:6px 10px;border-radius:6px;border:1px solid #334;background:#1a2a4a;color:#fff;cursor:pointer">Save</button>
-      `;
-      document.body.appendChild(bar);
-
-      document.getElementById("fc-save").onclick = () => {
-        const email = (document.getElementById("fc-email").value || "").trim();
-        const pw    = (document.getElementById("fc-pw").value || "").trim();
-
-        // basic checks: require business domain (not free webmail)
-        const freeDomains = ['gmail.com','yahoo.com','outlook.com','hotmail.com','icloud.com','aol.com','proton.me','protonmail.com','mail.com','gmx.com','yandex.com'];
-        const domain = (email.split("@")[1] || "").toLowerCase();
-        if (!email || !email.includes("@")) { alert("Please enter a valid business email."); return; }
-        if (freeDomains.includes(domain)) { alert("Please use a business email (not webmail)."); return; }
-        if (!pw) { alert("Please enter the site password."); return; }
-
-        localStorage.setItem("FR8COACH_EMAIL", email);
-        localStorage.setItem("FR8COACH_PW", pw);
-        window.PW = pw; // keep compatibility with existing code
-        window.USER_EMAIL = email;
-        alert("Saved. You can ask the coach now.");
-      };
-    }
-
-    // 2) Patch your existing coach fetch, if it uses window.PW
-    // If your page calls fetch('/api/coach', ...) elsewhere, ensure it includes userEmail & password header.
-    // If you already do that, you can ignore this helper.
-    window.fr8CoachFetch = async function(prompt) {
-      const pw = localStorage.getItem("FR8COACH_PW") || window.PW || "";
-      const email = localStorage.getItem("FR8COACH_EMAIL") || window.USER_EMAIL || "";
-      const r = await fetch('/api/coach', {
-        method:'POST',
-        headers:{ 'Content-Type':'application/json', 'x-site-password': pw },
-        body: JSON.stringify({ prompt, userEmail: email })
-      });
+    // helper to fetch JSON with password header
+    async function api(path, opts = {}) {
+      const pw = localStorage.getItem('FR8COACH_PW') || '';
+      const headers = Object.assign({'Content-Type':'application/json','x-site-password': pw}, opts.headers||{});
+      const r = await fetch(path, Object.assign({}, opts, { headers }));
+      if (!r.ok) throw new Error('HTTP '+r.status);
       return r.json();
+    }
+
+    // ---- Load Sales & Ops cards
+    async function loadCards() {
+      try {
+        const sales = await api('/api/cards?type=sales');
+        const ops   = await api('/api/cards?type=ops');
+        renderCards('sales', sales.cards || []);
+        renderCards('ops', ops.cards || []);
+      } catch (e) {
+        console.error(e);
+        document.getElementById('sales').innerHTML = '<div class="card">Failed to load sales cards</div>';
+        document.getElementById('ops').innerHTML   = '<div class="card">Failed to load ops cards</div>';
+      }
+    }
+
+    function renderCards(id, cards) {
+      const el = document.getElementById(id);
+      el.innerHTML = (cards && cards.length)
+        ? cards.map(c => `<div class="card"><div><strong>${c.title || c.header || 'Card'}</strong></div><div>${c.body || c.content || ''}</div></div>`).join('')
+        : '<div class="card">No cards yet</div>';
+    }
+
+    // ---- Ask coach
+    document.getElementById('ask').onclick = async () => {
+      const prompt = document.getElementById('q').value.trim();
+      const email  = localStorage.getItem('FR8COACH_EMAIL') || '';
+      const pw     = localStorage.getItem('FR8COACH_PW') || '';
+      if (!pw) return alert('Save the site password first.');
+      if (!email) return alert('Save your business email first.');
+      const out = document.getElementById('reply');
+      out.textContent = 'Thinking...';
+      try {
+        const r = await fetch('/api/coach', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-site-password': pw },
+          body: JSON.stringify({ prompt, userEmail: email })
+        });
+        const data = await r.json();
+        out.textContent = (data && data.reply) ? data.reply : JSON.stringify(data, null, 2);
+      } catch (e) {
+        out.textContent = 'Error: ' + e.message;
+      }
     };
-  })();
-</script>
+
+    // load on first view
+    loadCards();
+  </script>
 </body>
 </html>
