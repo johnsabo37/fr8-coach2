@@ -51,17 +51,24 @@
     .cards { display:grid; grid-template-columns: repeat(auto-fit,minmax(260px,1fr)); gap:12px; margin:12px 0 28px; }
     .card { background:#111a2e; border:1px solid #223; border-radius:12px; padding:12px; }
 
-    /* Coach IO — full width & aligned */
-    textarea#q {
-      width: 100%;                /* full width of content column */
-      min-height: 140px;          /* comfortable typing space */
-      resize: vertical;           /* user can make it taller */
-      line-height: 1.4;
+    /* Chat */
+    .chat {
+      background:#0f1730; border:1px solid #334; border-radius:12px; padding:12px;
     }
-    #reply.out {
-      width: 100%;                /* match input width */
-      white-space: pre-wrap;
-      background:#0f1730; border:1px solid #334; border-radius:8px; padding:12px; margin-top:10px;
+    .messages {
+      max-height: 480px; overflow:auto; padding:6px; display:flex; flex-direction:column; gap:12px;
+      background:#0c1326; border:1px solid #26304f; border-radius:8px;
+    }
+    .msg { display:flex; gap:10px; }
+    .msg .bubble {
+      padding:10px 12px; border-radius:12px; max-width: 100%;
+      white-space: pre-wrap; line-height:1.4;
+    }
+    .msg.user  .bubble { background:#17305e; border:1px solid #2a4a86; }
+    .msg.bot   .bubble { background:#13223f; border:1px solid #2b3f7d; }
+    .composer { margin-top:10px; display:flex; gap:10px; }
+    .composer textarea {
+      flex:1; min-height: 110px; resize: vertical; line-height: 1.4;
     }
   </style>
 </head>
@@ -99,13 +106,18 @@
       <div id="ops" class="cards"></div>
 
       <h2>Coach</h2>
-      <textarea id="q" placeholder="e.g., Draft a first-meeting agenda for a 1-lane trial with a big-box retailer."></textarea>
-      <div class="row" style="margin-top:8px">
-        <button id="ask">Ask</button>
-        <button id="refresh">Refresh Cards</button>
-        <span id="status" class="muted"></span>
+      <div class="chat">
+        <div id="messages" class="messages"></div>
+
+        <div class="composer">
+          <textarea id="q" placeholder="Ask a question or follow up…"></textarea>
+          <div style="display:flex; flex-direction:column; gap:10px;">
+            <button id="ask">Send</button>
+            <button id="refresh">Refresh Cards</button>
+          </div>
+        </div>
+        <div id="status" class="muted" style="margin-top:6px;"></div>
       </div>
-      <div id="reply" class="out"></div>
     </div>
   </section>
 
@@ -149,6 +161,7 @@
       gate.style.display = 'none';
       app.style.display  = 'block';
       await loadCards();
+      restoreChatFromStorage();
     }
 
     document.getElementById('enter').onclick = async () => {
@@ -219,27 +232,78 @@
       .replace(/&/g,"&amp;").replace(/</g,"&lt;")
       .replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;")}
 
-    // ---------- Coach ----------
-    document.getElementById('ask').onclick = async () => {
-      const prompt = document.getElementById('q').value.trim();
-      if (!prompt) return;
-      const out = document.getElementById('reply');
-      const status = document.getElementById('status');
-      out.textContent = 'Thinking…';
-      status.textContent = '';
+    // ---------- Chat UI (keeps & sends history) ----------
+    const messagesEl = document.getElementById('messages');
+    const qEl = document.getElementById('q');
+    const askBtn = document.getElementById('ask');
+    const refreshBtn = document.getElementById('refresh');
+    const statusEl = document.getElementById('status');
+
+    function appendMessage(role, text) {
+      const row = document.createElement('div');
+      row.className = 'msg ' + (role === 'user' ? 'user' : 'bot');
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.textContent = text;
+      row.appendChild(bubble);
+      messagesEl.appendChild(row);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function historyFromDom(limit = 8) {
+      const items = Array.from(messagesEl.querySelectorAll('.msg'))
+        .slice(-limit*2);
+      const hist = items.map(n => {
+        const role = n.classList.contains('user') ? 'user' : 'assistant';
+        const content = n.querySelector('.bubble')?.textContent || '';
+        return { role, content };
+      });
+      return hist;
+    }
+
+    function saveChatToStorage() {
+      const hist = historyFromDom(50);
+      localStorage.setItem('FR8COACH_CHAT', JSON.stringify(hist));
+    }
+
+    function restoreChatFromStorage() {
+      messagesEl.innerHTML = '';
       try {
+        const raw = localStorage.getItem('FR8COACH_CHAT');
+        if (!raw) return;
+        const hist = JSON.parse(raw);
+        (hist || []).forEach(m => appendMessage(m.role === 'assistant' ? 'bot' : 'user', m.content));
+      } catch {}
+    }
+
+    askBtn.onclick = async () => {
+      const prompt = qEl.value.trim();
+      if (!prompt) return;
+      const pw = savedPW();
+      if (!pw) { statusEl.textContent = 'Locked: enter the site password.'; return; }
+
+      appendMessage('user', prompt);
+      qEl.value = '';
+      statusEl.textContent = 'Thinking…';
+
+      try {
+        // Send recent history to backend for context
+        const hist = historyFromDom(8);
         const data = await api('/api/coach', {
           method: 'POST',
-          body: JSON.stringify({ prompt })
+          body: JSON.stringify({ prompt, history: hist })
         });
-        out.textContent = (data && data.reply) ? data.reply : JSON.stringify(data, null, 2);
+        const reply = (data && data.reply) ? data.reply : JSON.stringify(data, null, 2);
+        appendMessage('bot', reply);
+        statusEl.textContent = '';
+        saveChatToStorage();
       } catch (e) {
-        out.textContent = 'Error: ' + e.message;
-        if (/401/.test(e.message)) {
-          status.textContent = 'Unauthorized. Lock & re-enter the site password.';
-        }
+        appendMessage('bot', 'Error: ' + e.message);
+        statusEl.textContent = 'Failed.';
       }
     };
+
+    refreshBtn.onclick = loadCards;
   </script>
 </body>
 </html>
