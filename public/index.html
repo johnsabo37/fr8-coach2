@@ -2,83 +2,167 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Fr8Coach</title>
+  <title>Fr8Coach (Private)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     :root { color-scheme: dark; }
-    body{font-family:system-ui,Arial,sans-serif;background:#0b1220;color:#e6edf3;margin:0}
-    a{color:#6ab0ff}
-    .wrap{max-width:980px;margin:80px auto 120px;padding:0 16px}
-    h1{font-size:28px;margin:0 0 12px}
-    h2{font-size:18px;margin:20px 0 8px}
-    .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin:12px 0 28px}
-    .card{background:#111a2e;border:1px solid #223;border-radius:12px;padding:12px}
-    .loginbar{position:fixed;inset:auto 0 0 0;background:#0b1220;padding:10px;border-top:1px solid #223;display:flex;gap:8px;align-items:center;z-index:9999}
-    input,button,textarea{border-radius:8px;border:1px solid #334;background:#0f1730;color:#e6edf3}
-    input,button{padding:8px}
-    textarea{width:100%;min-height:120px;padding:10px}
-    .btn{cursor:pointer}
-    .out{white-space:pre-wrap;background:#0f1730;border:1px solid #334;border-radius:8px;padding:12px;margin-top:10px}
-    .muted{opacity:.8;font-size:12px}
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:#0b1220; color:#e6edf3; }
+
+    /* --- Fullscreen password gate --- */
+    #gate {
+      position: fixed; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      background: radial-gradient(1200px 800px at 50% -10%, #0f1730, #0b1220 60%, #0b1220);
+      padding: 24px;
+    }
+    .gate-card {
+      width: 100%; max-width: 460px;
+      background: #0f1730; border: 1px solid #223; border-radius: 14px;
+      padding: 22px; box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+    }
+    .gate-card h1 { margin: 0 0 10px; font-size: 22px; }
+    .gate-card p  { margin: 0 0 14px; opacity:.9; }
+    .row { display: flex; gap: 10px; margin-top: 12px; }
+    input, button, textarea {
+      border-radius: 10px; border: 1px solid #334; background:#0b1220; color:#e6edf3;
+      padding: 10px 12px; font-size: 14px;
+    }
+    input:focus, textarea:focus { outline: 2px solid #2b3f7d; }
+    button { cursor: pointer; background:#1a2a4a; border-color:#2a3a66; }
+    button:hover { background:#20345e; }
+    .muted { opacity:.8; font-size:12px; }
+
+    /* --- App layout (hidden until unlocked) --- */
+    #app { display: none; }
+    .wrap { max-width: 1000px; margin: 32px auto 120px; padding: 0 16px; }
+    h2 { font-size: 18px; margin: 20px 0 8px; }
+    .cards { display:grid; grid-template-columns: repeat(auto-fit,minmax(260px,1fr)); gap:12px; margin:12px 0 28px; }
+    .card { background:#111a2e; border:1px solid #223; border-radius:12px; padding:12px; }
+    .out { white-space: pre-wrap; background:#0f1730; border:1px solid #334; border-radius:8px; padding:12px; margin-top:10px; }
+    .topbar {
+      position: sticky; top: 0; z-index: 10;
+      background: rgba(11,18,32,0.9); backdrop-filter: blur(6px);
+      border-bottom:1px solid #223; padding:10px 16px; display:flex; gap:10px; align-items:center;
+    }
+    .spacer { flex: 1; }
+    .danger { background:#5b2230; border-color:#7a2d3d; }
+    .danger:hover { background:#6a2a39; }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>Fr8Coach</h1>
-    <p class="muted">Protected by a site password. Enter it below once, then refresh cards or ask the coach.</p>
 
-    <h2>Sales Cards</h2>
-    <div id="sales" class="cards"></div>
-
-    <h2>Ops Cards</h2>
-    <div id="ops" class="cards"></div>
-
-    <h2>Coach</h2>
-    <textarea id="q" placeholder="e.g., Draft a first-meeting agenda for a 1-lane trial with a big-box retailer."></textarea>
-    <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
-      <button id="ask" class="btn">Ask</button>
-      <button id="refresh" class="btn">Refresh Cards</button>
-      <span id="status" class="muted"></span>
+  <!-- Password Gate -->
+  <section id="gate">
+    <div class="gate-card">
+      <h1>Enter Site Password</h1>
+      <p>This private coach is restricted. Enter the shared site password to continue.</p>
+      <div class="row">
+        <input id="pw" type="password" placeholder="Site password" style="flex:1" />
+        <button id="enter">Enter</button>
+      </div>
+      <p id="gate-msg" class="muted" style="margin-top:10px;"></p>
     </div>
-    <div id="reply" class="out" style="margin-top:12px"></div>
-  </div>
+  </section>
 
-  <!-- Password bar (no email) -->
-  <div class="loginbar">
-    <strong>Site Password</strong>
-    <input id="fc-pw" type="password" placeholder="Enter site password" style="flex:1;min-width:260px" />
-    <button id="fc-save" class="btn">Save</button>
-    <button id="fc-clear" class="btn" title="Clear saved password">Clear</button>
-  </div>
+  <!-- App (hidden until password accepted) -->
+  <section id="app">
+    <div class="topbar">
+      <strong>Fr8Coach</strong>
+      <span class="spacer"></span>
+      <button id="changePw" class="danger" title="Clear saved password to lock the site">Lock</button>
+    </div>
+
+    <div class="wrap">
+      <p class="muted">You’re in. Cards and coach are now available.</p>
+
+      <h2>Sales Cards</h2>
+      <div id="sales" class="cards"></div>
+
+      <h2>Ops Cards</h2>
+      <div id="ops" class="cards"></div>
+
+      <h2>Coach</h2>
+      <textarea id="q" placeholder="e.g., Draft a first-meeting agenda for a 1-lane trial with a big-box retailer."></textarea>
+      <div class="row" style="margin-top:8px">
+        <button id="ask">Ask</button>
+        <button id="refresh">Refresh Cards</button>
+        <span id="status" class="muted"></span>
+      </div>
+      <div id="reply" class="out"></div>
+    </div>
+  </section>
 
   <script>
-    // ---- Persist ONLY the site password (no email) ----
-    const pwEl    = document.getElementById('fc-pw');
-    const saveBtn = document.getElementById('fc-save');
-    const clearBtn= document.getElementById('fc-clear');
-    const statusEl= document.getElementById('status');
+    // ---------- Password gate logic ----------
+    const gate = document.getElementById('gate');
+    const app  = document.getElementById('app');
+    const pwIn = document.getElementById('pw');
+    const gateMsg = document.getElementById('gate-msg');
 
-    // restore saved
-    const savedPW = localStorage.getItem('FR8COACH_PW') || '';
-    if (savedPW) pwEl.value = savedPW;
+    // Try auto-unlock if a password was saved before
+    (function initGate(){
+      const saved = localStorage.getItem('FR8COACH_PW');
+      if (saved) {
+        // soft-check by hitting a protected endpoint; if 401, show gate again
+        tryProtected(saved).then(ok => {
+          if (ok) unlock(saved);
+          else showGate();
+        }).catch(()=> showGate());
+      } else {
+        showGate();
+      }
+    })();
 
-    saveBtn.onclick = () => {
-      const pw = (pwEl.value || '').trim();
-      if (!pw) return alert('Enter the site password.');
+    function showGate(msg){
+      gate.style.display = 'flex';
+      app.style.display  = 'none';
+      if (msg) { gateMsg.textContent = msg; } else { gateMsg.textContent = ''; }
+      setTimeout(()=> pwIn.focus(), 50);
+    }
+
+    async function tryProtected(pw){
+      try {
+        const r = await fetch('/api/cards?type=sales', { headers: { 'x-site-password': pw } });
+        return r.status !== 401; // any non-401 means password was accepted (200/500 etc.)
+      } catch {
+        return false;
+      }
+    }
+
+    async function unlock(pw){
       localStorage.setItem('FR8COACH_PW', pw);
-      alert('Password saved.');
-      loadCards();
-    };
-    clearBtn.onclick = () => {
-      localStorage.removeItem('FR8COACH_PW');
-      pwEl.value = '';
-      alert('Saved password cleared.');
+      gate.style.display = 'none';
+      app.style.display  = 'block';
+      await loadCards(); // hydrate UI
+    }
+
+    document.getElementById('enter').onclick = async () => {
+      const pw = (pwIn.value || '').trim();
+      if (!pw) { gateMsg.textContent = 'Please enter the site password.'; return; }
+      gateMsg.textContent = 'Checking…';
+      const ok = await tryProtected(pw);
+      if (ok) {
+        unlock(pw);
+      } else {
+        gateMsg.textContent = 'Password incorrect. Try again.';
+        pwIn.select();
+      }
     };
 
-    // ---- Helper: fetch JSON with password header ----
+    document.getElementById('changePw').onclick = () => {
+      localStorage.removeItem('FR8COACH_PW');
+      showGate('Locked. Enter the site password to continue.');
+    };
+
+    // ---------- Shared helpers ----------
+    function savedPW(){ return localStorage.getItem('FR8COACH_PW') || ''; }
+
     async function api(path, opts = {}) {
-      const pw = localStorage.getItem('FR8COACH_PW') || '';
-      const headers = Object.assign({'Content-Type':'application/json','x-site-password': pw}, opts.headers||{});
+      const headers = Object.assign(
+        { 'Content-Type':'application/json', 'x-site-password': savedPW() },
+        opts.headers || {}
+      );
       const r = await fetch(path, Object.assign({}, opts, { headers }));
       if (!r.ok) {
         const txt = await r.text().catch(()=> '');
@@ -87,7 +171,7 @@
       return r.json();
     }
 
-    // ---- Load Sales & Ops cards ----
+    // ---------- Cards ----------
     async function loadCards() {
       const salesEl = document.getElementById('sales');
       const opsEl   = document.getElementById('ops');
@@ -100,12 +184,12 @@
         ]);
         renderCards('sales', sales.cards || []);
         renderCards('ops',   ops.cards   || []);
-        statusEl.textContent = '';
+        document.getElementById('status').textContent = '';
       } catch (e) {
         console.error(e);
-        salesEl.innerHTML = '<div class="card">Failed to load sales cards (check password)</div>';
-        opsEl.innerHTML   = '<div class="card">Failed to load ops cards (check password)</div>';
-        statusEl.textContent = 'Unauthorized? Make sure the site password is saved.';
+        salesEl.innerHTML = '<div class="card">Failed to load sales cards</div>';
+        opsEl.innerHTML   = '<div class="card">Failed to load ops cards</div>';
+        document.getElementById('status').textContent = 'Check the site password.';
       }
     }
 
@@ -125,16 +209,14 @@
       .replace(/&/g,"&amp;").replace(/</g,"&lt;")
       .replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;")}
 
-    document.getElementById('refresh').onclick = loadCards;
-
-    // ---- Ask coach (no email sent) ----
+    // ---------- Coach ----------
     document.getElementById('ask').onclick = async () => {
       const prompt = document.getElementById('q').value.trim();
-      const pw = localStorage.getItem('FR8COACH_PW') || '';
-      if (!pw) return alert('Save the site password first.');
+      if (!prompt) return;
       const out = document.getElementById('reply');
+      const status = document.getElementById('status');
       out.textContent = 'Thinking…';
-      statusEl.textContent = '';
+      status.textContent = '';
       try {
         const data = await api('/api/coach', {
           method: 'POST',
@@ -143,12 +225,11 @@
         out.textContent = (data && data.reply) ? data.reply : JSON.stringify(data, null, 2);
       } catch (e) {
         out.textContent = 'Error: ' + e.message;
-        if (/401/.test(e.message)) statusEl.textContent = 'Unauthorized. Check the saved site password.';
+        if (/401/.test(e.message)) {
+          status.textContent = 'Unauthorized. Lock & re-enter the site password.';
+        }
       }
     };
-
-    // Initial load
-    loadCards();
   </script>
 </body>
 </html>
