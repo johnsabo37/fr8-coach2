@@ -101,5 +101,59 @@
       }catch(e){ ul.innerHTML='<li>Failed to load.</li>'; }
     }
   </script>
+<script>
+  // --- Minimal "business email" login helper ---
+  (function () {
+    // Allow hard refresh without losing login
+    const savedEmail = localStorage.getItem("FR8COACH_EMAIL") || "";
+    const savedPW    = localStorage.getItem("FR8COACH_PW") || "";
+
+    // 1) Inject a lightweight login bar if not already present
+    if (!document.getElementById("fc-login-bar")) {
+      const bar = document.createElement("div");
+      bar.id = "fc-login-bar";
+      bar.style.cssText = "position:fixed;inset:auto 0 0 0;background:#0b1220;color:#fff;padding:10px;display:flex;gap:8px;align-items:center;z-index:9999;font:14px system-ui";
+      bar.innerHTML = `
+        <strong style="margin-right:8px">Fr8Coach Login</strong>
+        <input id="fc-email" type="email" placeholder="your.name@company.com" value="${savedEmail}" style="flex:1;min-width:260px;padding:6px;border-radius:6px;border:1px solid #334;outline:none" />
+        <input id="fc-pw" type="password" placeholder="Site password" value="${savedPW}" style="width:160px;padding:6px;border-radius:6px;border:1px solid #334;outline:none" />
+        <button id="fc-save" style="padding:6px 10px;border-radius:6px;border:1px solid #334;background:#1a2a4a;color:#fff;cursor:pointer">Save</button>
+      `;
+      document.body.appendChild(bar);
+
+      document.getElementById("fc-save").onclick = () => {
+        const email = (document.getElementById("fc-email").value || "").trim();
+        const pw    = (document.getElementById("fc-pw").value || "").trim();
+
+        // basic checks: require business domain (not free webmail)
+        const freeDomains = ['gmail.com','yahoo.com','outlook.com','hotmail.com','icloud.com','aol.com','proton.me','protonmail.com','mail.com','gmx.com','yandex.com'];
+        const domain = (email.split("@")[1] || "").toLowerCase();
+        if (!email || !email.includes("@")) { alert("Please enter a valid business email."); return; }
+        if (freeDomains.includes(domain)) { alert("Please use a business email (not webmail)."); return; }
+        if (!pw) { alert("Please enter the site password."); return; }
+
+        localStorage.setItem("FR8COACH_EMAIL", email);
+        localStorage.setItem("FR8COACH_PW", pw);
+        window.PW = pw; // keep compatibility with existing code
+        window.USER_EMAIL = email;
+        alert("Saved. You can ask the coach now.");
+      };
+    }
+
+    // 2) Patch your existing coach fetch, if it uses window.PW
+    // If your page calls fetch('/api/coach', ...) elsewhere, ensure it includes userEmail & password header.
+    // If you already do that, you can ignore this helper.
+    window.fr8CoachFetch = async function(prompt) {
+      const pw = localStorage.getItem("FR8COACH_PW") || window.PW || "";
+      const email = localStorage.getItem("FR8COACH_EMAIL") || window.USER_EMAIL || "";
+      const r = await fetch('/api/coach', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json', 'x-site-password': pw },
+        body: JSON.stringify({ prompt, userEmail: email })
+      });
+      return r.json();
+    };
+  })();
+</script>
 </body>
 </html>
