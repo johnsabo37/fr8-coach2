@@ -1,4 +1,4 @@
-// server.js (CommonJS, pre-email: password-gated APIs, cards working, optional People Finder)
+// server.js (CommonJS, Render-ready, password-gated APIs, cards, history-aware coach + optional People Finder)
 
 const express = require("express");
 const cors = require("cors");
@@ -20,7 +20,7 @@ const SERPAPI_KEY = process.env.SERPAPI_KEY || "";       // optional: for People
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "public"))); // serves your existing frontend
+app.use(express.static(path.join(__dirname, "public"))); // serves frontend
 
 const supabase = (SUPABASE_URL && SUPABASE_KEY)
   ? createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -65,11 +65,12 @@ app.get("/api/cards", async (req, res) => {
 });
 
 // ----- Coach (OpenAI) -----
-// No email domain logic. Uses KB topics "ShipWMT Coaching" + "Industry Insights" by default.
-// Includes optional People Finder via SerpAPI based on the question text.
+// Accepts: { prompt, history? [{role:'user'|'assistant', content:string}] }
+// Uses KB topics "ShipWMT Coaching" + "Industry Insights" by default.
+// Includes optional People Finder via SerpAPI if a company is detected in the question.
 app.post("/api/coach", async (req, res) => {
   try {
-    const { prompt } = req.body || {};
+    const { prompt, history } = req.body || {};
     if (!prompt) return res.status(400).json({ error: "Missing prompt" });
     const q = (prompt || "").trim();
 
@@ -139,10 +140,7 @@ app.post("/api/coach", async (req, res) => {
       if (m1 && m1[1]) company = cleanCompany(m1[1]);
       else if (m2 && m2[1]) company = cleanCompany(m2[1]);
 
-      if (!SERPAPI_KEY) {
-        // silently skip if you prefer; leaving diagnostic helps when testing
-        // peopleBlock = `\n[People finder disabled: missing SERPAPI_KEY]\n`;
-      } else if (company) {
+      if (SERPAPI_KEY && company) {
         const roleQuery =
           '("transportation" OR "logistics") (sourcing OR procurement OR carrier OR delivery OR "supply chain") manager';
         const q1 = `site:linkedin.com/in "${company}" ${roleQuery}`;
@@ -173,6 +171,7 @@ app.post("/api/coach", async (req, res) => {
           peopleBlock = `\nContacts & intake — ${company}:\n${people.join("\n")}\n\n`;
         }
       }
+      // if no SERPAPI_KEY or no company detected, we quietly skip
     } catch (_) { /* ignore people errors so coach still replies */ }
 
     // 3) System message
@@ -201,14 +200,25 @@ ${contextBlock}
 
     if (!openai) return res.status(500).json({ error: "OpenAI not configured" });
 
+    // Build chat messages: system + (optional recent history) + current user prompt
+    const historyMsgs = Array.isArray(history)
+      ? history.slice(-8).map(m => ({
+          role: m.role === "assistant" ? "assistant" : "user",
+          content: String(m.content || "").slice(0, 4000)
+        }))
+      : [];
+
+    const messages = [
+      { role: "system", content: systemMsg },
+      ...historyMsgs,
+      { role: "user", content: prompt }
+    ];
+
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: systemMsg },
-        { role: "user", content: prompt }
-      ],
+      messages,
       temperature: 0.2,
-      max_tokens: 500
+      max_tokens: 700
     });
 
     const modelText = completion.choices?.[0]?.message?.content || "No reply";
