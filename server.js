@@ -1,5 +1,6 @@
-// server.js (CommonJS, Render-ready, password-gated APIs, cards, history-aware coach + optional People Finder)
-// Company focus: NTG (www.ntgfreight.com)
+// server.js (CommonJS, Render-ready)
+// Password-gated APIs, Sales/Ops cards from Supabase, history-aware coach,
+// optional People Finder via SerpAPI. Company focus: ShipWMT (shipwmt.com)
 
 const express = require("express");
 const cors = require("cors");
@@ -123,14 +124,14 @@ function detectCompany(prompt, history) {
 
 // ----- Coach (OpenAI) -----
 // Accepts: { prompt, history? [{role:'user'|'assistant', content:string}] }
-// Focus: NTG Coaching
+// Focus: ShipWMT Coaching
 app.post("/api/coach", async (req, res) => {
   try {
     const { prompt, history } = req.body || {};
     if (!prompt) return res.status(400).json({ error: "Missing prompt" });
     const q = (prompt || "").trim();
 
-    // 1) KB retrieval (prioritize NTG Coaching, then Industry Insights)
+    // 1) KB retrieval (prioritize ShipWMT Coaching, then Industry Insights)
     async function fetchNotes(topic, limit = 6) {
       if (!supabase) return [];
       const { data, error } = await supabase
@@ -144,23 +145,23 @@ app.post("/api/coach", async (req, res) => {
       return data;
     }
 
-    const ntgMatches     = await fetchNotes("NTG Coaching", 6);
-    const industryMatches = await fetchNotes("Industry Insights", 6);
+    const shipMatches      = await fetchNotes("ShipWMT Coaching", 6);
+    const industryMatches  = await fetchNotes("Industry Insights", 6);
 
-    let ntgFallback = [];
-    if (ntgMatches.length === 0 && supabase) {
+    let shipFallback = [];
+    if (shipMatches.length === 0 && supabase) {
       const { data } = await supabase
         .from("kb_notes")
         .select("topic, content, created_at")
-        .eq("topic", "NTG Coaching")
+        .eq("topic", "ShipWMT Coaching")
         .order("created_at", { ascending: false })
         .limit(2);
-      ntgFallback = data || [];
+      shipFallback = data || [];
     }
 
     const blended = [
-      ...ntgMatches.slice(0, 4),
-      ...ntgFallback.slice(0, Math.max(0, 4 - ntgMatches.length)),
+      ...shipMatches.slice(0, 4),
+      ...shipFallback.slice(0, Math.max(0, 4 - shipMatches.length)),
       ...industryMatches.slice(0, 2)
     ].filter(Boolean);
 
@@ -198,9 +199,9 @@ app.post("/api/coach", async (req, res) => {
       // If no SERPAPI_KEY or no company found, skip silently.
     } catch (_) { /* ignore people errors so coach still replies */ }
 
-    // 3) System message (NTG-focused)
+    // 3) System message (ShipWMT-focused)
     const approvedSources = [
-      "Internal SOPs/KB (NTG Coaching)",
+      "Internal SOPs/KB (ShipWMT Coaching)",
       "Sales creators: Darren McKee, Jacob Karp, Will Jenkins, Stephen Mathis, Kevin Dorsey",
       "Industry experts: Craig Fuller, Chris Pickett, Brittain Ladd, Brad Jacobs, Eric Williams, Ken Adamo",
       "Companies/outlets: FreightWaves/SONAR, DAT, RXO, FedEx, UPS, Walmart"
@@ -208,12 +209,12 @@ app.post("/api/coach", async (req, res) => {
 
     const contextBlock =
       (blended.length
-        ? `Context snippets (prioritized: NTG Coaching):\n` +
+        ? `Context snippets (prioritized: ShipWMT Coaching):\n` +
           blended.map((n, i) => `[${i + 1}] (${n.topic}) ${n.content}`).join("\n---\n")
-        : `No KB matches found; prefer NTG Coaching guidance and approved sources.`) +
+        : `No KB matches found; prefer ShipWMT Coaching guidance and approved sources.`) +
       (peopleBlock ? `\n---\n${peopleBlock}` : "");
 
-    const systemMsg = `You are Fr8Coach, an expert freight brokerage coach for the internal NTG team (ntgfreight.com).
+    const systemMsg = `You are Fr8Coach, an expert freight brokerage coach for employees of ShipWMT (shipwmt.com).
 Emphasize: disciplined prospecting & sequencing, one-lane trials with explicit success criteria, proactive track-and-trace, carrier vetting & scorecards, margin protection, clear escalation/SOPs, and data-backed context (DAT, SONAR).
 Approved sources (priority): ${approvedSources}
 Style: concise checklists, concrete scripts, measurable next steps.
