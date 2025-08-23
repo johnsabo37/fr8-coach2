@@ -5,131 +5,204 @@
   <title>Fr8Coach Admin Upload</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:#0b0f17; color:#e6e6e6; margin:0; }
-    .wrap { max-width: 880px; margin: 40px auto; padding: 24px; background:#111827; border-radius:16px; border:1px solid #233046; }
+    :root {
+      --bg:#0b0f17;
+      --panel:#111827;
+      --panel-border:#233046;
+      --text:#e6e6e6;
+      --muted:#9aa7bd;
+      --input-bg:#0f1623;
+      --input-border:#2b3a55;
+      --primary:#2563eb;
+      --primary-hover:#1d4ed8;
+      --accent:#c7d2fe;
+      --radius:16px;
+    }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:var(--bg); color:var(--text); margin:0; }
+    .wrap { max-width: 880px; margin: 40px auto; padding: 24px; background:var(--panel); border-radius:var(--radius); border:1px solid var(--panel-border); }
     h1 { margin:0 0 10px; font-weight:700; text-align:center; }
-    p.sub { color:#9aa7bd; text-align:center; margin:0 0 24px; }
-    label { display:block; font-size:14px; margin:14px 0 6px; color:#c7d2fe; }
+    p.sub { color:var(--muted); text-align:center; margin:0 0 24px; }
+    label { display:block; font-size:14px; margin:14px 0 6px; color:var(--accent); }
     input[type="text"], input[type="url"], textarea, select, input[type="password"] {
-      width:100%; padding:10px 12px; border-radius:10px; border:1px solid #2b3a55; background:#0f1623; color:#e6e6e6;
+      width:100%; padding:10px 12px; border-radius:10px; border:1px solid var(--input-border); background:var(--input-bg); color:var(--text);
     }
     input[type="file"] {
-      width:100%; padding:10px; border-radius:10px; border:1px dashed #2b3a55; background:#0f1623; color:#9aa7bd;
+      width:100%; padding:10px; border-radius:10px; border:1px dashed var(--input-border); background:var(--input-bg); color:var(--muted);
     }
     button {
-      background:#2563eb; color:white; border:none; padding:12px 16px; border-radius:10px; margin-top:16px; cursor:pointer;
+      background:var(--primary); color:white; border:none; padding:12px 16px; border-radius:10px; margin-top:16px; cursor:pointer;
     }
-    button:hover { background:#1d4ed8; }
+    button:hover { background:var(--primary-hover); }
     .row { display:grid; grid-template-columns: 1fr 1fr; gap:14px; }
-    .note { font-size:12px; color:#9aa7bd; }
-    .result { white-space:pre-wrap; background:#0f1623; border:1px solid #2b3a55; padding:12px; border-radius:10px; margin-top:16px; }
-    .pw { text-align:center; margin-bottom:16px; }
-    .pw input { max-width: 320px; }
+    .note { font-size:12px; color:var(--muted); }
+    .result { white-space:pre-wrap; background:var(--input-bg); border:1px solid var(--input-border); padding:12px; border-radius:10px; margin-top:16px; }
+    .center { text-align:center; }
+    .hidden { display:none !important; }
+    .actions { display:flex; gap:8px; justify-content:center; margin-top:12px; }
+    a.link { color:#93c5fd; text-decoration:none; }
+    a.link:hover { text-decoration:underline; }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>Fr8Coach — Admin Upload</h1>
-    <p class="sub">Upload .txt / .md files to the knowledge base. (Admin password required.)</p>
+    <h1>Fr8Coach — Admin</h1>
+    <p class="sub" id="subtitle">Enter the admin password to continue.</p>
 
-    <div class="pw">
+    <!-- Gate (password-only) -->
+    <section id="gate">
       <label>Admin Password</label>
       <input id="pw" type="password" placeholder="Enter the ADMIN password"/>
-      <button id="savePw">Save Admin Password</button>
-      <div class="note">Stored locally in your browser as <code>FR8COACH_ADMIN_PW</code>.</div>
-    </div>
+      <button id="enterBtn">Enter Password</button>
+      <div class="actions">
+        <button id="clearBtn" type="button" style="background:#374151;">Clear Saved Password</button>
+        <a class="link" href="/">Back to Site</a>
+      </div>
+      <p class="note center">This is stored locally in your browser as <code>FR8COACH_ADMIN_PW</code>.</p>
+    </section>
 
-    <form id="upform">
-      <label>Files (.txt or .md, up to 10 files)</label>
-      <input id="files" type="file" accept=".txt,.md,text/plain,text/markdown" multiple required />
+    <!-- Upload UI (hidden until password entered) -->
+    <section id="uploader" class="hidden">
+      <form id="upform">
+        <label>Files (.txt or .md, up to 10 files)</label>
+        <input id="files" type="file" accept=".txt,.md,text/plain,text/markdown" multiple required />
 
-      <div class="row">
-        <div>
-          <label>Title (optional — defaults to filename)</label>
-          <input id="title" type="text" placeholder="e.g., Retail Prospecting SOP"/>
+        <div class="row">
+          <div>
+            <label>Title (optional — defaults to filename)</label>
+            <input id="title" type="text" placeholder="e.g., Retail Prospecting SOP"/>
+          </div>
+          <div>
+            <label>Source Type</label>
+            <select id="source_type">
+              <option value="SOP" selected>SOP</option>
+              <option value="Playbook">Playbook</option>
+              <option value="Deck">Deck</option>
+              <option value="Policy">Policy</option>
+              <option value="Template">Template</option>
+              <option value="News">News</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
         </div>
-        <div>
-          <label>Source Type</label>
-          <select id="source_type">
-            <option value="SOP" selected>SOP</option>
-            <option value="Playbook">Playbook</option>
-            <option value="Deck">Deck</option>
-            <option value="Policy">Policy</option>
-            <option value="Template">Template</option>
-            <option value="News">News</option>
-            <option value="Other">Other</option>
-          </select>
+
+        <div class="row">
+          <div>
+            <label>Source URL (optional)</label>
+            <input id="source_url" type="url" placeholder="https://..."/>
+          </div>
+          <div>
+            <label>Vertical</label>
+            <input id="vertical" type="text" value="General"/>
+          </div>
         </div>
+
+        <div class="row">
+          <div>
+            <label>Company</label> <!-- renamed from Shipper -->
+            <input id="shipper" type="text" value="Windmill Transport"/>
+          </div>
+          <div>
+            <label>Tags (comma-separated)</label>
+            <input id="tags" type="text" placeholder="sales, prospecting, retail"/>
+          </div>
+        </div>
+
+        <button type="submit">Upload</button>
+      </form>
+
+      <div class="actions">
+        <button id="changePwBtn" type="button" style="background:#374151;">Change Admin Password</button>
+        <a class="link" href="/">Back to Site</a>
       </div>
 
-      <div class="row">
-        <div>
-          <label>Source URL (optional)</label>
-          <input id="source_url" type="url" placeholder="https://..."/>
-        </div>
-        <div>
-          <label>Vertical</label>
-          <input id="vertical" type="text" value="General"/>
-        </div>
-      </div>
-
-      <div class="row">
-        <div>
-          <label>Shipper</label>
-          <input id="shipper" type="text" value="Windmill Transport"/>
-        </div>
-        <div>
-          <label>Tags (comma-separated)</label>
-          <input id="tags" type="text" placeholder="sales, prospecting, retail"/>
-        </div>
-      </div>
-
-      <button type="submit">Upload</button>
-    </form>
-
-    <div id="out" class="result" style="display:none"></div>
+      <div id="out" class="result hidden"></div>
+    </section>
   </div>
 
   <script>
-    // Store separate ADMIN password locally
+    // Elements
+    const gate = document.getElementById('gate');
+    const uploader = document.getElementById('uploader');
+    const subtitle = document.getElementById('subtitle');
     const pwEl = document.getElementById('pw');
-    const saveBtn = document.getElementById('savePw');
-    const saved = localStorage.getItem('FR8COACH_ADMIN_PW');
-    if (saved) pwEl.value = saved;
-    saveBtn.onclick = () => {
-      const v = pwEl.value.trim();
-      if (!v) return alert('Enter an admin password first.');
-      localStorage.setItem('FR8COACH_ADMIN_PW', v);
-      alert('Saved.');
-    };
-
+    const enterBtn = document.getElementById('enterBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const changePwBtn = document.getElementById('changePwBtn');
     const out = document.getElementById('out');
     const form = document.getElementById('upform');
 
+    const KEY = 'FR8COACH_ADMIN_PW';
+
+    // Show correct view on load
+    const savedPw = localStorage.getItem(KEY);
+    if (savedPw) {
+      gate.classList.add('hidden');
+      uploader.classList.remove('hidden');
+      subtitle.textContent = 'Upload documents to the knowledge base.';
+    } else {
+      gate.classList.remove('hidden');
+      uploader.classList.add('hidden');
+      subtitle.textContent = 'Enter the admin password to continue.';
+    }
+
+    // Enter password -> save locally -> switch view
+    enterBtn.onclick = () => {
+      const v = pwEl.value.trim();
+      if (!v) { alert('Please enter a password.'); return; }
+      localStorage.setItem(KEY, v);
+      pwEl.value = '';
+      gate.classList.add('hidden');
+      uploader.classList.remove('hidden');
+      subtitle.textContent = 'Upload documents to the knowledge base.';
+    };
+
+    // Clear saved password (from gate)
+    clearBtn.onclick = () => {
+      localStorage.removeItem(KEY);
+      alert('Saved admin password cleared.');
+    };
+
+    // Change password (from uploader)
+    changePwBtn.onclick = () => {
+      localStorage.removeItem(KEY);
+      alert('Admin password cleared. Please re-enter.');
+      uploader.classList.add('hidden');
+      gate.classList.remove('hidden');
+      subtitle.textContent = 'Enter the admin password to continue.';
+    };
+
+    // Upload handler
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const adminPw = localStorage.getItem('FR8COACH_ADMIN_PW') || pwEl.value.trim();
-      if (!adminPw) return alert('Please enter/save the ADMIN password first.');
+      const adminPw = localStorage.getItem(KEY);
+      if (!adminPw) {
+        alert('Please enter the admin password first.');
+        uploader.classList.add('hidden');
+        gate.classList.remove('hidden');
+        subtitle.textContent = 'Enter the admin password to continue.';
+        return;
+      }
 
       const fd = new FormData();
       const files = document.getElementById('files').files;
-      if (!files || !files.length) return alert('Pick at least one file.');
+      if (!files || !files.length) { alert('Pick at least one file.'); return; }
       for (const f of files) fd.append('files', f);
 
       fd.append('title', document.getElementById('title').value.trim());
       fd.append('source_type', document.getElementById('source_type').value);
       fd.append('source_url', document.getElementById('source_url').value.trim());
       fd.append('vertical', document.getElementById('vertical').value.trim());
-      fd.append('shipper', document.getElementById('shipper').value.trim());
+      fd.append('shipper', document.getElementById('shipper').value.trim()); // Company
       fd.append('tags', document.getElementById('tags').value.trim());
 
-      out.style.display = 'block';
+      out.classList.remove('hidden');
       out.textContent = 'Uploading...';
 
       try {
         const resp = await fetch('/api/admin/upload', {
           method: 'POST',
-          headers: { 'x-admin-password': adminPw }, // <-- separate header
+          headers: { 'x-admin-password': adminPw }, // separate admin header
           body: fd
         });
         const data = await resp.json();
