@@ -1,12 +1,10 @@
-// server.js — FULL REPLACEMENT
-// Express app with password-gated APIs, Sales/Ops cards (Supabase), KB hybrid search (pgvector),
-// history-aware coach with citations, optional People Finder (SerpAPI), and NEW Admin Upload.
+// server.js — FULL, CLEAN VERSION with separate ADMIN_PASSWORD for /api/admin/*
 
+require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
 const multer = require("multer");
-require("dotenv").config();
 
 const { createClient } = require("@supabase/supabase-js");
 const OpenAI = require("openai");
@@ -14,12 +12,14 @@ const OpenAI = require("openai");
 // ----- Env -----
 const PORT = process.env.PORT || 10000;
 const SITE_PASSWORD = process.env.SITE_PASSWORD || "";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || ""; // <-- separate admin secret
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_KEY = process.env.SUPABASE_KEY || "";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
-const SERPAPI_KEY = process.env.SERPAPI_KEY || ""; // optional for People Finder
+const SERPAPI_KEY = process.env.SERPAPI_KEY || ""; // optional
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || "text-embedding-3-small"; // 1536-dim
 
+// ----- App -----
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -34,9 +34,13 @@ const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 // Health
 app.get("/api/ping", (req, res) => res.json({ ok: true, message: "pong" }));
 
-// Gate all /api routes with the site password
+// Gate all regular /api routes with the SITE_PASSWORD
 app.use("/api", (req, res, next) => {
   if (req.path === "/ping") return next();
+
+  // Allow admin routes to be handled by their own middleware (below).
+  if (req.path.startsWith("/admin/")) return next();
+
   if (req.headers["x-site-password"] !== SITE_PASSWORD) {
     return res.status(401).json({ error: "Unauthorized" });
   }
@@ -57,7 +61,6 @@ function chunkText(text, maxLen = 2000, overlap = 200, maxChunks = 50) {
   }
   return chunks;
 }
-
 async function embedOne(text) {
   if (!openai) throw new Error("OpenAI not configured");
   const r = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: text });
@@ -195,7 +198,7 @@ app.post("/api/coach", async (req, res) => {
     let peopleBlock = "";
     try {
       const company = detectCompany(prompt, history);
-      if (SERPAPI_KEY && company) {
+      if (SERPAPI_KEY && company && global.fetch) {
         const roleQuery =
           '("transportation" OR "logistics") (sourcing OR procurement OR carrier OR delivery OR "supply chain") manager';
         async function querySerp(companyName) {
@@ -212,9 +215,7 @@ app.post("/api/coach", async (req, res) => {
         let people = await querySerp(company);
         if (!people.length) {
           const alt = company.replace(/^The\s+/i, "");
-          if (alt && alt !== company) {
-            people = await querySerp(alt);
-          }
+          if (alt && alt !== company) people = await querySerp(alt);
         }
         if (people.length) {
           peopleBlock = `\nContacts & intake — ${company}:\n${people.join("\n")}\n\n`;
@@ -282,13 +283,14 @@ Playbook:
   }
 });
 
-// ===== NEW: Admin Upload API =====
-// Accepts multipart/form-data with fields: title?, source_type?, source_url?, vertical?, shipper?, tags?
-// and one or more files (txt/md). All files share the same metadata; titles default to filename if not given.
+// ===== Admin Upload API — now requires x-admin-password header =====
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } }); // 2MB/file
-
 app.post("/api/admin/upload", upload.array("files", 10), async (req, res) => {
   try {
+    // Check separate admin password
+    if (req.headers["x-admin-password"] !== ADMIN_PASSWORD) {
+      return res.status(401).json({ error: "Unauthorized (admin)" });
+    }
     if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
     if (!openai)   return res.status(500).json({ error: "OpenAI not configured" });
 
@@ -319,11 +321,9 @@ app.post("/api/admin/upload", upload.array("files", 10), async (req, res) => {
         continue;
       }
 
-      // decode text
       const raw = file.buffer.toString("utf8");
-      const docTitle = title?.trim() || file.originalname;
+      const docTitle = (title && title.trim()) || file.originalname;
 
-      // insert doc
       const { data: docRow, error: docErr } = await supabase
         .from("kb_docs")
         .insert({
@@ -339,10 +339,10 @@ app.post("/api/admin/upload", upload.array("files", 10), async (req, res) => {
       if (docErr) throw docErr;
       const doc_id = docRow.id;
 
-      const chunks = chunkText(raw); // conservative chunker
+      const chunks = chunkText(raw);
       let idx = 0;
       for (const chunk of chunks) {
-        const emb = await embedOne(chunk);                // one-by-one (memory safe)
+        const emb = await embedOne(chunk);
         const { error: chErr } = await supabase
           .from("kb_chunks")
           .insert({ doc_id, chunk_index: idx, text: chunk, embedding: emb });
@@ -360,29 +360,13 @@ app.post("/api/admin/upload", upload.array("files", 10), async (req, res) => {
   }
 });
 
-// ----- Static routes for card pages -----
-app.get("/sales.html", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "sales.html"));
-});
-app.get("/ops.html", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "ops.html"));
-});
-app.get("/sales", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "sales.html"));
-});
-app.get("/ops", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "ops.html"));
-});
-
-// Admin page
-app.get("/admin", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "admin.html"));
-});
-
-// Root
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
-});
+// ----- Static routes -----
+app.get("/sales.html", (_req, res) => res.sendFile(path.join(__dirname, "public", "sales.html")));
+app.get("/ops.html", (_req, res) => res.sendFile(path.join(__dirname, "public", "ops.html")));
+app.get("/sales", (_req, res) => res.sendFile(path.join(__dirname, "public", "sales.html")));
+app.get("/ops", (_req, res) => res.sendFile(path.join(__dirname, "public", "ops.html")));
+app.get("/admin", (_req, res) => res.sendFile(path.join(__dirname, "public", "admin.html")));
+app.get("/", (_req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 
 app.listen(PORT, () => {
   console.log(`Fr8Coach running on port ${PORT}`);
