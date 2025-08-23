@@ -134,8 +134,194 @@
   </section>
 
   <script>
-    // --- same JavaScript as previous working version (password gate, cards, chat, clear conversation) ---
-    // (re-use exactly from the last deployed version you had working)
+    // ---------- Password gate logic ----------
+    const gate = document.getElementById('gate');
+    const app  = document.getElementById('app');
+    const pwIn = document.getElementById('pw');
+    const gateMsg = document.getElementById('gate-msg');
+
+    (function initGate(){
+      const saved = localStorage.getItem('FR8COACH_PW');
+      if (saved) {
+        tryProtected(saved).then(ok => {
+          if (ok) unlock(saved);
+          else showGate();
+        }).catch(()=> showGate());
+      } else {
+        showGate();
+      }
+    })();
+
+    function showGate(msg){
+      gate.style.display = 'flex';
+      app.style.display  = 'none';
+      gateMsg.textContent = msg || '';
+      setTimeout(()=> pwIn.focus(), 50);
+    }
+
+    async function tryProtected(pw){
+      try {
+        const r = await fetch('/api/cards?type=sales', { headers: { 'x-site-password': pw } });
+        return r.status !== 401;
+      } catch {
+        return false;
+      }
+    }
+
+    async function unlock(pw){
+      localStorage.setItem('FR8COACH_PW', pw);
+      gate.style.display = 'none';
+      app.style.display  = 'block';
+      await loadCards();
+      restoreChatFromStorage();
+    }
+
+    document.getElementById('enter').onclick = async () => {
+      const pw = (pwIn.value || '').trim();
+      if (!pw) { gateMsg.textContent = 'Please enter the site password.'; return; }
+      gateMsg.textContent = 'Checking…';
+      const ok = await tryProtected(pw);
+      if (ok) unlock(pw);
+      else { gateMsg.textContent = 'Password incorrect. Try again.'; pwIn.select(); }
+    };
+
+    document.getElementById('changePw').onclick = () => {
+      localStorage.removeItem('FR8COACH_PW');
+      showGate('Locked. Enter the site password to continue.');
+    };
+
+    // ---------- Shared helpers ----------
+    function savedPW(){ return localStorage.getItem('FR8COACH_PW') || ''; }
+
+    async function api(path, opts = {}) {
+      const headers = Object.assign(
+        { 'Content-Type':'application/json', 'x-site-password': savedPW() },
+        opts.headers || {}
+      );
+      const r = await fetch(path, Object.assign({}, opts, { headers }));
+      if (!r.ok) {
+        const txt = await r.text().catch(()=> '');
+        throw new Error(`HTTP ${r.status}${txt ? ' – ' + txt : ''}`);
+      }
+      return r.json();
+    }
+
+    // ---------- Cards ----------
+    async function loadCards() {
+      const salesEl = document.getElementById('sales');
+      const opsEl   = document.getElementById('ops');
+      salesEl.innerHTML = '<div class="card">Loading…</div>';
+      opsEl.innerHTML   = '<div class="card">Loading…</div>';
+      try {
+        const [sales, ops] = await Promise.all([
+          api('/api/cards?type=sales'),
+          api('/api/cards?type=ops')
+        ]);
+        renderCards('sales', sales.cards || []);
+        renderCards('ops',   ops.cards   || []);
+        document.getElementById('status').textContent = '';
+      } catch (e) {
+        console.error(e);
+        salesEl.innerHTML = '<div class="card">Failed to load sales cards</div>';
+        opsEl.innerHTML   = '<div class="card">Failed to load ops cards</div>';
+        document.getElementById('status').textContent = 'Check the site password.';
+      }
+    }
+
+    function renderCards(id, cards) {
+      const el = document.getElementById(id);
+      el.innerHTML = (cards && cards.length)
+        ? cards.map(c => `
+            <div class="card">
+              <div><strong>${escapeHtml(c.title || c.header || 'Card')}</strong></div>
+              <div>${escapeHtml(c.body || c.content || '')}</div>
+            </div>
+          `).join('')
+        : '<div class="card">No cards yet</div>';
+    }
+
+    function escapeHtml(s){return String(s)
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;")
+      .replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;")}
+
+    // ---------- Chat UI (keeps & sends history) ----------
+    const messagesEl = document.getElementById('messages');
+    const qEl = document.getElementById('q');
+    const askBtn = document.getElementById('ask');
+    const clearBtn = document.getElementById('clearChat');
+    const statusEl = document.getElementById('status');
+
+    function appendMessage(role, text) {
+      const row = document.createElement('div');
+      row.className = 'msg ' + (role === 'user' ? 'user' : 'bot');
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.textContent = text;
+      row.appendChild(bubble);
+      messagesEl.appendChild(row);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function historyFromDom(limit = 8) {
+      const items = Array.from(messagesEl.querySelectorAll('.msg'))
+        .slice(-limit*2);
+      const hist = items.map(n => {
+        const role = n.classList.contains('user') ? 'user' : 'assistant';
+        const content = n.querySelector('.bubble')?.textContent || '';
+        return { role, content };
+      });
+      return hist;
+    }
+
+    function saveChatToStorage() {
+      const hist = historyFromDom(50);
+      localStorage.setItem('FR8COACH_CHAT', JSON.stringify(hist));
+    }
+
+    function restoreChatFromStorage() {
+      messagesEl.innerHTML = '';
+      try {
+        const raw = localStorage.getItem('FR8COACH_CHAT');
+        if (!raw) return;
+        const hist = JSON.parse(raw);
+        (hist || []).forEach(m => appendMessage(m.role === 'assistant' ? 'bot' : 'user', m.content));
+      } catch {}
+    }
+
+    function clearConversation() {
+      messagesEl.innerHTML = '';
+      localStorage.removeItem('FR8COACH_CHAT');
+      statusEl.textContent = 'Conversation cleared.';
+      qEl.focus();
+    }
+
+    clearBtn.onclick = clearConversation;
+
+    askBtn.onclick = async () => {
+      const prompt = qEl.value.trim();
+      if (!prompt) return;
+      const pw = savedPW();
+      if (!pw) { statusEl.textContent = 'Locked: enter the site password.'; return; }
+
+      appendMessage('user', prompt);
+      qEl.value = '';
+      statusEl.textContent = 'Thinking…';
+
+      try {
+        const hist = historyFromDom(8);
+        const data = await api('/api/coach', {
+          method: 'POST',
+          body: JSON.stringify({ prompt, history: hist })
+        });
+        const reply = (data && data.reply) ? data.reply : JSON.stringify(data, null, 2);
+        appendMessage('bot', reply);
+        statusEl.textContent = '';
+        saveChatToStorage();
+      } catch (e) {
+        appendMessage('bot', 'Error: ' + e.message);
+        statusEl.textContent = 'Failed.';
+      }
+    };
   </script>
 </body>
 </html>
