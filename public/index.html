@@ -4,11 +4,8 @@
   <meta charset="utf-8" />
   <title>Fr8Coach (Private)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <!-- Optional webfont: drop a file at /public/fonts/aptos-mono.woff2 to use Aptos Mono -->
   <style>
     :root { color-scheme: dark; }
-
-    /* If you upload /public/fonts/aptos-mono.woff2 this will activate. */
     @font-face {
       font-family: "Aptos Mono";
       src: url("/fonts/aptos-mono.woff2") format("woff2");
@@ -16,84 +13,53 @@
       font-style: normal;
       font-display: swap;
     }
-
     * { box-sizing: border-box; }
     body {
       margin:0;
       font-family: "Aptos Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-      background:#0b1220; color:#e6edf3;
-      font-size: 14px; /* base size matches prompt */
+      background:#0b1220; color:#e6edf3; font-size:14px;
     }
 
-    /* --- Fullscreen password gate --- */
-    #gate {
-      position: fixed; inset: 0;
-      display: flex; align-items: center; justify-content: center;
-      background: radial-gradient(1200px 800px at 50% -10%, #0f1730, #0b1220 60%, #0b1220);
-      padding: 24px;
-    }
-    .gate-card {
-      width: 100%; max-width: 460px;
-      background: #0f1730; border: 1px solid #223; border-radius: 14px;
-      padding: 22px; box-shadow: 0 10px 30px rgba(0,0,0,0.35);
-    }
-    .gate-card h1 { margin: 0 0 10px; font-size: 20px; font-weight:700; }
-    .gate-card p  { margin: 0 0 14px; opacity:.9; }
-    .row { display: flex; gap: 10px; margin-top: 12px; }
-    input, button, textarea {
-      border-radius: 10px; border: 1px solid #334; background:#0b1220; color:#e6edf3;
-      padding: 10px 12px; font-size: 14px; font-family: inherit;
-    }
-    input:focus, textarea:focus { outline: 2px solid #2b3f7d; }
-    button { cursor: pointer; background:#1a2a4a; border-color:#2a3a66; }
+    /* Gate */
+    #gate { position: fixed; inset:0; display:flex; align-items:center; justify-content:center;
+      background: radial-gradient(1200px 800px at 50% -10%, #0f1730, #0b1220 60%, #0b1220); padding:24px; }
+    .gate-card { width:100%; max-width:460px; background:#0f1730; border:1px solid #223; border-radius:14px; padding:22px; box-shadow:0 10px 30px rgba(0,0,0,.35); }
+    .gate-card h1 { margin:0 0 10px; font-size:20px; font-weight:700; }
+    .row { display:flex; gap:10px; margin-top:12px; }
+    input, button, textarea { border-radius:10px; border:1px solid #334; background:#0b1220; color:#e6edf3; padding:10px 12px; font-size:14px; font-family:inherit; }
+    input:focus, textarea:focus { outline:2px solid #2b3f7d; }
+    button { cursor:pointer; background:#1a2a4a; border-color:#2a3a66; }
     button:hover { background:#20345e; }
     .muted { opacity:.8; font-size:12px; }
 
-    /* --- App layout (hidden until unlocked) --- */
-    #app { display: none; }
-    .wrap { max-width: 1000px; margin: 32px auto 120px; padding: 0 16px; }
-    .center-title { text-align:center; margin-bottom: 20px; }
-    h1 { font-size: 28px; margin: 0 0 8px; font-weight:700; }
-
-    .topbar {
-      position: sticky; top: 0; z-index: 10;
-      background: rgba(11,18,32,0.9); backdrop-filter: blur(6px);
-      border-bottom:1px solid #223; padding:10px 16px; display:flex; gap:10px; align-items:center;
-    }
-    .spacer { flex: 1; }
+    /* App */
+    #app { display:none; }
+    .wrap { max-width:1000px; margin:32px auto 120px; padding:0 16px; }
+    .center-title { text-align:center; margin-bottom:20px; }
+    h1 { font-size:28px; margin:0 0 8px; font-weight:700; }
+    .topbar { position:sticky; top:0; z-index:10; background:rgba(11,18,32,.9); backdrop-filter:blur(6px); border-bottom:1px solid #223; padding:10px 16px; display:flex; gap:10px; align-items:center; }
+    .spacer { flex:1; }
     .danger { background:#5b2230; border-color:#7a2d3d; }
     .danger:hover { background:#6a2a39; }
-    .secondary { background:#263960; border-color:#2b4a86; }
-    .secondary:hover { background:#2c4573; }
-
-    /* Cards */
-    .cards { display:grid; grid-template-columns: repeat(auto-fit,minmax(260px,1fr)); gap:12px; margin:12px 0 28px; }
-    .card { background:#111a2e; border:1px solid #223; border-radius:12px; padding:12px; }
 
     /* Chat */
-    .chat {
-      background:#0f1730; border:1px solid #334; border-radius:12px; padding:12px; margin-bottom: 30px;
-    }
+    .chat { background:#0f1730; border:1px solid #334; border-radius:12px; padding:12px; margin-bottom: 30px; }
     .chat-controls { margin-bottom:8px; }
-    .messages {
-      max-height: 480px; overflow:auto; padding:6px; display:flex; flex-direction:column; gap:12px;
-      background:#0c1326; border:1px solid #26304f; border-radius:8px;
-    }
+    .messages { max-height:480px; overflow:auto; padding:6px; display:flex; flex-direction:column; gap:12px; background:#0c1326; border:1px solid #26304f; border-radius:8px; }
     .msg { display:flex; gap:10px; }
-    .msg.bot  { justify-content: flex-start; }
-    .msg.user { justify-content: flex-end; } /* right-align user bubbles */
-    .bubble {
-      padding:10px 12px; border-radius:12px; max-width: 100%;
-      white-space: pre-wrap; line-height:1.5; font-size:14px;
-    }
-    .msg.user  .bubble { background:#1d3a72; border:1px solid #2a4a86; }
-    .msg.bot   .bubble { background:#13223f; border:1px solid #2b3f7d; }
-
-    .composer { margin-bottom:10px; display:flex; gap:10px; } /* now ABOVE messages */
-    .composer textarea {
-      flex:1; min-height: 110px; resize: vertical; line-height: 1.5; font-size:14px;
-    }
+    .msg.bot  { justify-content:flex-start; }
+    .msg.user { justify-content:flex-end; }
+    .bubble { padding:10px 12px; border-radius:12px; max-width:100%; white-space:pre-wrap; line-height:1.5; font-size:14px; }
+    .msg.user .bubble { background:#1d3a72; border:1px solid #2a4a86; }
+    .msg.bot  .bubble { background:#13223f; border:1px solid #2b3f7d; }
+    .composer { margin-bottom:10px; display:flex; gap:10px; }
+    .composer textarea { flex:1; min-height:110px; resize:vertical; line-height:1.5; font-size:14px; }
     .composer-buttons { display:flex; flex-direction:column; gap:10px; }
+
+    /* Links row */
+    .links { display:flex; gap:12px; margin-top:8px; }
+    .link-card { display:inline-block; padding:10px 14px; border-radius:10px; background:#111a2e; border:1px solid #223; text-decoration:none; color:#e6edf3; }
+    .link-card:hover { background:#162341; }
   </style>
 </head>
 <body>
@@ -102,7 +68,7 @@
   <section id="gate">
     <div class="gate-card">
       <h1>Enter Site Password</h1>
-      <p>This private coach is restricted. Enter the shared site password to continue.</p>
+      <p class="muted">This private coach is restricted. Enter the shared site password to continue.</p>
       <div class="row">
         <input id="pw" type="password" placeholder="Site password" style="flex:1" />
         <button id="enter">Enter</button>
@@ -111,7 +77,7 @@
     </div>
   </section>
 
-  <!-- App (hidden until password accepted) -->
+  <!-- App -->
   <section id="app">
     <div class="topbar">
       <span class="spacer"></span>
@@ -119,19 +85,17 @@
     </div>
 
     <div class="wrap">
-      <!-- Centered Title -->
       <div class="center-title">
         <h1>Fr8Coach</h1>
         <p class="muted">Your private freight coaching assistant</p>
       </div>
 
-      <!-- Chat card: composer FIRST, then transcript (no "Coach" headline) -->
+      <!-- Chat card: composer FIRST, then transcript -->
       <div class="chat">
         <div class="chat-controls">
           <span id="status" class="muted"></span>
         </div>
 
-        <!-- Composer moved above transcript -->
         <div class="composer">
           <textarea id="q" placeholder="Ask the Coach a question... ex) what is a good social selling strategy to help get set up with Home Depot?"></textarea>
           <div class="composer-buttons">
@@ -140,16 +104,14 @@
           </div>
         </div>
 
-        <!-- Transcript below -->
         <div id="messages" class="messages"></div>
       </div>
 
-      <!-- Sales and Ops cards follow -->
-      <h2>Sales Cards</h2>
-      <div id="sales" class="cards"></div>
-
-      <h2>Ops Cards</h2>
-      <div id="ops" class="cards"></div>
+      <!-- Links to cards pages -->
+      <div class="links">
+        <a class="link-card" href="/sales.html">Sales Cards →</a>
+        <a class="link-card" href="/ops.html">Ops Cards →</a>
+      </div>
     </div>
   </section>
 
@@ -163,13 +125,8 @@
     (function initGate(){
       const saved = localStorage.getItem('FR8COACH_PW');
       if (saved) {
-        tryProtected(saved).then(ok => {
-          if (ok) unlock(saved);
-          else showGate();
-        }).catch(()=> showGate());
-      } else {
-        showGate();
-      }
+        tryProtected(saved).then(ok => { if (ok) unlock(saved); else showGate(); }).catch(()=> showGate());
+      } else { showGate(); }
     })();
 
     function showGate(msg){
@@ -183,16 +140,13 @@
       try {
         const r = await fetch('/api/cards?type=sales', { headers: { 'x-site-password': pw } });
         return r.status !== 401;
-      } catch {
-        return false;
-      }
+      } catch { return false; }
     }
 
     async function unlock(pw){
       localStorage.setItem('FR8COACH_PW', pw);
       gate.style.display = 'none';
       app.style.display  = 'block';
-      await loadCards();
       restoreChatFromStorage();
     }
 
@@ -201,8 +155,7 @@
       if (!pw) { gateMsg.textContent = 'Please enter the site password.'; return; }
       gateMsg.textContent = 'Checking…';
       const ok = await tryProtected(pw);
-      if (ok) unlock(pw);
-      else { gateMsg.textContent = 'Password incorrect. Try again.'; pwIn.select(); }
+      if (ok) unlock(pw); else { gateMsg.textContent = 'Password incorrect. Try again.'; pwIn.select(); }
     };
 
     document.getElementById('changePw').onclick = () => {
@@ -212,12 +165,8 @@
 
     // ---------- Shared helpers ----------
     function savedPW(){ return localStorage.getItem('FR8COACH_PW') || ''; }
-
     async function api(path, opts = {}) {
-      const headers = Object.assign(
-        { 'Content-Type':'application/json', 'x-site-password': savedPW() },
-        opts.headers || {}
-      );
+      const headers = Object.assign({ 'Content-Type':'application/json', 'x-site-password': savedPW() }, opts.headers || {});
       const r = await fetch(path, Object.assign({}, opts, { headers }));
       if (!r.ok) {
         const txt = await r.text().catch(()=> '');
@@ -226,45 +175,7 @@
       return r.json();
     }
 
-    // ---------- Cards ----------
-    async function loadCards() {
-      const salesEl = document.getElementById('sales');
-      const opsEl   = document.getElementById('ops');
-      salesEl.innerHTML = '<div class="card">Loading…</div>';
-      opsEl.innerHTML   = '<div class="card">Loading…</div>';
-      try {
-        const [sales, ops] = await Promise.all([
-          api('/api/cards?type=sales'),
-          api('/api/cards?type=ops')
-        ]);
-        renderCards('sales', sales.cards || []);
-        renderCards('ops',   ops.cards   || []);
-        document.getElementById('status').textContent = '';
-      } catch (e) {
-        console.error(e);
-        salesEl.innerHTML = '<div class="card">Failed to load sales cards</div>';
-        opsEl.innerHTML   = '<div class="card">Failed to load ops cards</div>';
-        document.getElementById('status').textContent = 'Check the site password.';
-      }
-    }
-
-    function renderCards(id, cards) {
-      const el = document.getElementById(id);
-      el.innerHTML = (cards && cards.length)
-        ? cards.map(c => `
-            <div class="card">
-              <div><strong>${escapeHtml(c.title || c.header || 'Card')}</strong></div>
-              <div>${escapeHtml(c.body || c.content || '')}</div>
-            </div>
-          `).join('')
-        : '<div class="card">No cards yet</div>';
-    }
-
-    function escapeHtml(s){return String(s)
-      .replace(/&/g,"&amp;").replace(/</g,"&lt;")
-      .replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;")}
-
-    // ---------- Chat UI (keeps & sends history) ----------
+    // ---------- Chat UI ----------
     const messagesEl = document.getElementById('messages');
     const qEl = document.getElementById('q');
     const askBtn = document.getElementById('ask');
@@ -283,14 +194,12 @@
     }
 
     function historyFromDom(limit = 8) {
-      const items = Array.from(messagesEl.querySelectorAll('.msg'))
-        .slice(-limit*2);
-      const hist = items.map(n => {
+      const items = Array.from(messagesEl.querySelectorAll('.msg')).slice(-limit*2);
+      return items.map(n => {
         const role = n.classList.contains('user') ? 'user' : 'assistant';
         const content = n.querySelector('.bubble')?.textContent || '';
         return { role, content };
       });
-      return hist;
     }
 
     function saveChatToStorage() {
@@ -314,7 +223,6 @@
       statusEl.textContent = 'Conversation cleared.';
       qEl.focus();
     }
-
     clearBtn.onclick = clearConversation;
 
     askBtn.onclick = async () => {
@@ -329,12 +237,8 @@
 
       try {
         const hist = historyFromDom(8);
-        const data = await api('/api/coach', {
-          method: 'POST',
-          body: JSON.stringify({ prompt, history: hist })
-        });
-        const reply = (data && data.reply) ? data.reply : JSON.stringify(data, null, 2);
-        appendMessage('bot', reply);
+        const data = await api('/api/coach', { method: 'POST', body: JSON.stringify({ prompt, history: hist }) });
+        appendMessage('bot', (data && data.reply) ? data.reply : JSON.stringify(data, null, 2));
         statusEl.textContent = '';
         saveChatToStorage();
       } catch (e) {
