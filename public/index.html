@@ -4,10 +4,17 @@
   <meta charset="utf-8" />
   <title>Fr8Coach (Private)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Open Sans font -->
+  <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600&display=swap" rel="stylesheet">
   <style>
     :root { color-scheme: dark; }
     * { box-sizing: border-box; }
-    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:#0b1220; color:#e6edf3; }
+    body {
+      margin:0;
+      font-family: "Open Sans", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      background:#0b1220; color:#e6edf3;
+      font-size: 14px; /* base = prompt size */
+    }
 
     /* --- Fullscreen password gate --- */
     #gate {
@@ -21,12 +28,12 @@
       background: #0f1730; border: 1px solid #223; border-radius: 14px;
       padding: 22px; box-shadow: 0 10px 30px rgba(0,0,0,0.35);
     }
-    .gate-card h1 { margin: 0 0 10px; font-size: 22px; }
+    .gate-card h1 { margin: 0 0 10px; font-size: 20px; font-weight:600; }
     .gate-card p  { margin: 0 0 14px; opacity:.9; }
     .row { display: flex; gap: 10px; margin-top: 12px; }
     input, button, textarea {
       border-radius: 10px; border: 1px solid #334; background:#0b1220; color:#e6edf3;
-      padding: 10px 12px; font-size: 14px;
+      padding: 10px 12px; font-size: 14px; font-family: inherit;
     }
     input:focus, textarea:focus { outline: 2px solid #2b3f7d; }
     button { cursor: pointer; background:#1a2a4a; border-color:#2a3a66; }
@@ -37,7 +44,7 @@
     #app { display: none; }
     .wrap { max-width: 1000px; margin: 32px auto 120px; padding: 0 16px; }
     .center-title { text-align:center; margin-bottom: 20px; }
-    h1 { font-size: 32px; margin: 0 0 8px; }
+    h1 { font-size: 28px; margin: 0 0 8px; font-weight:600; }
 
     .topbar {
       position: sticky; top: 0; z-index: 10;
@@ -64,15 +71,18 @@
       background:#0c1326; border:1px solid #26304f; border-radius:8px;
     }
     .msg { display:flex; gap:10px; }
-    .msg .bubble {
+    .msg.bot  { justify-content: flex-start; }
+    .msg.user { justify-content: flex-end; } /* right-align user */
+    .bubble {
       padding:10px 12px; border-radius:12px; max-width: 100%;
-      white-space: pre-wrap; line-height:1.4;
+      white-space: pre-wrap; line-height:1.5; font-size:14px; /* match prompt size */
     }
-    .msg.user  .bubble { background:#17305e; border:1px solid #2a4a86; }
+    .msg.user  .bubble { background:#1d3a72; border:1px solid #2a4a86; }
     .msg.bot   .bubble { background:#13223f; border:1px solid #2b3f7d; }
+
     .composer { margin-top:10px; display:flex; gap:10px; }
     .composer textarea {
-      flex:1; min-height: 110px; resize: vertical; line-height: 1.4;
+      flex:1; min-height: 110px; resize: vertical; line-height: 1.5; font-size:14px;
     }
     .composer-buttons { display:flex; flex-direction:column; gap:10px; }
   </style>
