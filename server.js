@@ -1,6 +1,7 @@
 // server.js (CommonJS, Render-ready)
-// Password-gated APIs, Sales/Ops cards from Supabase, history-aware coach,
+// Password-gated APIs, Sales/Ops cards (Supabase), history-aware coach,
 // optional People Finder via SerpAPI. Company focus: ShipWMT (shipwmt.com)
+// Adds explicit routes for /sales.html, /ops.html and pretty URLs /sales, /ops.
 
 const express = require("express");
 const cors = require("cors");
@@ -22,7 +23,9 @@ const SERPAPI_KEY = process.env.SERPAPI_KEY || "";       // optional: for People
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "public"))); // serves frontend
+
+// Serve static files in /public (index.html, sales.html, ops.html, etc.)
+app.use(express.static(path.join(__dirname, "public")));
 
 const supabase = (SUPABASE_URL && SUPABASE_KEY)
   ? createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -145,8 +148,8 @@ app.post("/api/coach", async (req, res) => {
       return data;
     }
 
-    const shipMatches      = await fetchNotes("ShipWMT Coaching", 6);
-    const industryMatches  = await fetchNotes("Industry Insights", 6);
+    const shipMatches     = await fetchNotes("ShipWMT Coaching", 6);
+    const industryMatches = await fetchNotes("Industry Insights", 6);
 
     let shipFallback = [];
     if (shipMatches.length === 0 && supabase) {
@@ -265,7 +268,23 @@ Playbook:
   }
 });
 
-// ----- Frontend fallback -----
+// ----- Explicit routes for cards pages -----
+app.get("/sales.html", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "sales.html"));
+});
+app.get("/ops.html", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "ops.html"));
+});
+
+// Pretty URLs (optional)
+app.get("/sales", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "sales.html"));
+});
+app.get("/ops", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "ops.html"));
+});
+
+// ----- Frontend fallback (root) -----
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
