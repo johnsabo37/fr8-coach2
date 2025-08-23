@@ -1,66 +1,81 @@
-// server.js (CommonJS, Render-ready)
-// Password-gated APIs, Sales/Ops cards (Supabase), history-aware coach,
-// optional People Finder via SerpAPI. Company name in replies: Windmill Transport (shipwmt.com).
-// Explicit routes for /sales.html, /ops.html and pretty URLs /sales, /ops.
+// server.js — FULL REPLACEMENT
+// Express app with password-gated APIs, Sales/Ops cards (Supabase), KB hybrid search (pgvector),
+// history-aware coach with citations, optional People Finder (SerpAPI), and NEW Admin Upload.
 
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
+const multer = require("multer");
 require("dotenv").config();
 
 const { createClient } = require("@supabase/supabase-js");
 const OpenAI = require("openai");
 
-// ----- Config from env -----
+// ----- Env -----
 const PORT = process.env.PORT || 10000;
-const SITE_PASSWORD = process.env.SITE_PASSWORD || "";   // required in x-site-password header
+const SITE_PASSWORD = process.env.SITE_PASSWORD || "";
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_KEY = process.env.SUPABASE_KEY || "";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
-const SERPAPI_KEY = process.env.SERPAPI_KEY || "";       // optional: for People Finder
+const SERPAPI_KEY = process.env.SERPAPI_KEY || ""; // optional for People Finder
+const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || "text-embedding-3-small"; // 1536-dim
 
-// ----- Clients -----
 const app = express();
 app.use(cors());
 app.use(express.json());
-
-// Serve static files in /public (index.html, sales.html, ops.html, etc.)
 app.use(express.static(path.join(__dirname, "public")));
 
 const supabase = (SUPABASE_URL && SUPABASE_KEY)
   ? createClient(SUPABASE_URL, SUPABASE_KEY)
   : null;
 
-const openai = OPENAI_API_KEY
-  ? new OpenAI({ apiKey: OPENAI_API_KEY })
-  : null;
+const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 
-// ----- Health -----
+// Health
 app.get("/api/ping", (req, res) => res.json({ ok: true, message: "pong" }));
 
-// ----- Simple auth gate for all /api routes (password required) -----
+// Gate all /api routes with the site password
 app.use("/api", (req, res, next) => {
-  if (req.path === "/ping") return next(); // allow ping without password
+  if (req.path === "/ping") return next();
   if (req.headers["x-site-password"] !== SITE_PASSWORD) {
     return res.status(401).json({ error: "Unauthorized" });
   }
   next();
 });
 
-// ----- Cards (Supabase): /api/cards?type=sales|ops -----
+// ===== Helpers =====
+function chunkText(text, maxLen = 2000, overlap = 200, maxChunks = 50) {
+  const t = String(text || "");
+  const chunks = [];
+  let start = 0;
+  while (start < t.length && chunks.length < maxChunks) {
+    const end = Math.min(start + maxLen, t.length);
+    const slice = t.slice(start, end).trim();
+    if (slice.length > 120) chunks.push(slice);
+    start = end - overlap;
+    if (start < 0) start = 0;
+  }
+  return chunks;
+}
+
+async function embedOne(text) {
+  if (!openai) throw new Error("OpenAI not configured");
+  const r = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: text });
+  return r.data[0].embedding;
+}
+
+// ----- Cards (sales/ops) -----
 app.get("/api/cards", async (req, res) => {
   try {
     if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
     const type = (req.query.type || "sales").toLowerCase();
     const table = type === "ops" ? "ops_cards" : "sales_cards";
-
     const { data, error } = await supabase
       .from(table)
       .select("*")
       .order("priority", { ascending: false })
       .order("created_at", { ascending: false })
       .limit(8);
-
     if (error) throw error;
     res.json({ source: table, cards: data || [] });
   } catch (e) {
@@ -69,7 +84,33 @@ app.get("/api/cards", async (req, res) => {
   }
 });
 
-// ----- Helper: company detection from text (for People Finder) -----
+// ----- KB hybrid search API -----
+// POST /api/kb/search { q, limit? }
+app.post("/api/kb/search", async (req, res) => {
+  try {
+    if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
+    if (!openai)   return res.status(500).json({ error: "OpenAI not configured" });
+    const { q, limit = 8 } = req.body || {};
+    if (!q || !q.trim()) return res.status(400).json({ error: "Missing q" });
+
+    const emb = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: q });
+    const queryEmbedding = emb.data?.[0]?.embedding;
+    const { data, error } = await supabase.rpc("kb_hybrid_search", {
+      query_embedding: queryEmbedding,
+      query_text: q,
+      limit_n: limit,
+      w_vec: 0.6,
+      w_kw: 0.4
+    });
+    if (error) throw error;
+    res.json({ results: data || [] });
+  } catch (e) {
+    console.error("kb/search error:", e.message || e);
+    res.status(500).json({ error: "KB search failed" });
+  }
+});
+
+// ----- People Finder helpers (optional SerpAPI) -----
 function normalizeCompany(c) {
   if (!c) return "";
   let s = c.trim().replace(/[?.,;:]+$/g, "");
@@ -88,7 +129,6 @@ function normalizeCompany(c) {
   if (/^fedex$/i.test(s))       s = "FedEx";
   return s.trim();
 }
-
 function detectCompanyFromText(text) {
   if (!text) return null;
   const q = String(text);
@@ -100,13 +140,9 @@ function detectCompanyFromText(text) {
   const raw = m1?.[1] || m2?.[1];
   return raw ? normalizeCompany(raw) : null;
 }
-
 function detectCompany(prompt, history) {
-  // 1) Try current prompt
   let company = detectCompanyFromText(prompt);
   if (company) return company;
-
-  // 2) Walk recent history (most recent last), prefer user turns
   const items = Array.isArray(history) ? history.slice().reverse() : [];
   for (const m of items) {
     if (!m || !m.content) continue;
@@ -115,8 +151,6 @@ function detectCompany(prompt, history) {
       if (c) return c;
     }
   }
-
-  // 3) As a last resort, scan assistant text too
   for (const m of items) {
     if (!m || !m.content) continue;
     const c = detectCompanyFromText(m.content);
@@ -125,57 +159,45 @@ function detectCompany(prompt, history) {
   return null;
 }
 
-// ----- Coach (OpenAI) -----
-// Accepts: { prompt, history? [{role:'user'|'assistant', content:string}] }
-// Company name in replies: Windmill Transport (shipwmt.com)
+// ----- Coach (KB + optional People Finder) -----
 app.post("/api/coach", async (req, res) => {
   try {
     const { prompt, history } = req.body || {};
     if (!prompt) return res.status(400).json({ error: "Missing prompt" });
     const q = (prompt || "").trim();
+    if (!openai) return res.status(500).json({ error: "OpenAI not configured" });
 
-    // 1) KB retrieval (prioritize Windmill Transport coaching, then Industry Insights)
-    async function fetchNotes(topic, limit = 6) {
-      if (!supabase) return [];
-      const { data, error } = await supabase
-        .from("kb_notes")
-        .select("topic, content, created_at")
-        .eq("topic", topic)
-        .or(`content.ilike.%${q}%`)
-        .order("created_at", { ascending: false })
-        .limit(limit);
-      if (error || !data) return [];
-      return data;
-    }
+    // 1) KB retrieval
+    let kbResults = [];
+    try {
+      const emb = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: q });
+      const queryEmbedding = emb.data?.[0]?.embedding;
+      if (queryEmbedding && supabase) {
+        const { data } = await supabase.rpc("kb_hybrid_search", {
+          query_embedding: queryEmbedding,
+          query_text: q,
+          limit_n: 8,
+          w_vec: 0.6,
+          w_kw: 0.4
+        });
+        kbResults = data || [];
+      }
+    } catch (_) {}
 
-    const windmillMatches = await fetchNotes("ShipWMT Coaching", 6); // table topic remains as created
-    const industryMatches = await fetchNotes("Industry Insights", 6);
+    const citations = kbResults.map((r, i) => {
+      const label = `[${i+1}] ${r.title || 'Doc'} (score: ${r.score?.toFixed(2) || '-'})`;
+      const link  = r.source_url ? ` — ${r.source_url}` : '';
+      const snippet = (r.text || '').slice(0, 320).replace(/\s+/g,' ').trim();
+      return `${label}${link}\n${snippet}…`;
+    }).join('\n---\n');
 
-    let windmillFallback = [];
-    if (windmillMatches.length === 0 && supabase) {
-      const { data } = await supabase
-        .from("kb_notes")
-        .select("topic, content, created_at")
-        .eq("topic", "ShipWMT Coaching")
-        .order("created_at", { ascending: false })
-        .limit(2);
-      windmillFallback = data || [];
-    }
-
-    const blended = [
-      ...windmillMatches.slice(0, 4),
-      ...windmillFallback.slice(0, Math.max(0, 4 - windmillMatches.length)),
-      ...industryMatches.slice(0, 2)
-    ].filter(Boolean);
-
-    // 2) People Finder (optional) — uses company from prompt OR history
+    // 2) People finder (optional)
     let peopleBlock = "";
     try {
       const company = detectCompany(prompt, history);
       if (SERPAPI_KEY && company) {
         const roleQuery =
           '("transportation" OR "logistics") (sourcing OR procurement OR carrier OR delivery OR "supply chain") manager';
-
         async function querySerp(companyName) {
           const q1 = `site:linkedin.com/in "${companyName}" ${roleQuery}`;
           const url1 = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(q1)}&num=10&api_key=${SERPAPI_KEY}`;
@@ -187,7 +209,6 @@ app.post("/api/coach", async (req, res) => {
             .filter(i => /linkedin\.com\/in\//i.test(i.link || i.url))
             .map(i => `- ${i.title} — ${i.link || i.url}`);
         }
-
         let people = await querySerp(company);
         if (!people.length) {
           const alt = company.replace(/^The\s+/i, "");
@@ -199,22 +220,18 @@ app.post("/api/coach", async (req, res) => {
           peopleBlock = `\nContacts & intake — ${company}:\n${people.join("\n")}\n\n`;
         }
       }
-      // If no SERPAPI_KEY or no company found, skip silently.
-    } catch (_) { /* ignore people errors so coach still replies */ }
+    } catch (_) {}
 
-    // 3) System message (Windmill Transport-focused)
     const approvedSources = [
-      "Internal SOPs/KB (ShipWMT Coaching)",
+      "Internal SOPs/KB (Windmill Transport coaching)",
       "Sales creators: Darren McKee, Jacob Karp, Will Jenkins, Stephen Mathis, Kevin Dorsey",
       "Industry experts: Craig Fuller, Chris Pickett, Brittain Ladd, Brad Jacobs, Eric Williams, Ken Adamo",
       "Companies/outlets: FreightWaves/SONAR, DAT, RXO, FedEx, UPS, Walmart"
     ].join("; ");
 
     const contextBlock =
-      (blended.length
-        ? `Context snippets (prioritized: Windmill Transport coaching):\n` +
-          blended.map((n, i) => `[${i + 1}] (${n.topic}) ${n.content}`).join("\n---\n")
-        : `No KB matches found; prefer Windmill Transport coaching guidance and approved sources.`) +
+      (citations ? `Context snippets (KB search):\n${citations}` :
+        `No KB matches found; prefer Windmill Transport coaching guidance and approved sources.`) +
       (peopleBlock ? `\n---\n${peopleBlock}` : "");
 
     const systemMsg = `You are Fr8Coach, an expert freight brokerage coach for employees of Windmill Transport (shipwmt.com).
@@ -226,9 +243,6 @@ Cite snippets like [1], [2] that correspond to the context block.
 ${contextBlock}
 `;
 
-    if (!openai) return res.status(500).json({ error: "OpenAI not configured" });
-
-    // Build chat messages: system + (optional recent history) + current user prompt
     const historyMsgs = Array.isArray(history)
       ? history.slice(-8).map(m => ({
           role: m.role === "assistant" ? "assistant" : "user",
@@ -246,7 +260,7 @@ ${contextBlock}
       model: "gpt-4o-mini",
       messages,
       temperature: 0.2,
-      max_tokens: 700
+      max_tokens: 800
     });
 
     const modelText = completion.choices?.[0]?.message?.content || "No reply";
@@ -268,15 +282,91 @@ Playbook:
   }
 });
 
-// ----- Explicit routes for cards pages -----
+// ===== NEW: Admin Upload API =====
+// Accepts multipart/form-data with fields: title?, source_type?, source_url?, vertical?, shipper?, tags?
+// and one or more files (txt/md). All files share the same metadata; titles default to filename if not given.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } }); // 2MB/file
+
+app.post("/api/admin/upload", upload.array("files", 10), async (req, res) => {
+  try {
+    if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
+    if (!openai)   return res.status(500).json({ error: "OpenAI not configured" });
+
+    const {
+      title,
+      source_type = "SOP",
+      source_url = null,
+      vertical = "General",
+      shipper = "Windmill Transport",
+      tags = ""
+    } = req.body || {};
+
+    const tagList = String(tags || "")
+      .split(",")
+      .map(s => s.trim())
+      .filter(Boolean);
+
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ error: "No files uploaded" });
+
+    const results = [];
+
+    for (const file of files) {
+      const mime = (file.mimetype || "").toLowerCase();
+      const allowed = ["text/plain", "text/markdown", "application/octet-stream"];
+      if (!allowed.includes(mime)) {
+        results.push({ filename: file.originalname, status: "skipped", reason: `Unsupported type: ${mime}` });
+        continue;
+      }
+
+      // decode text
+      const raw = file.buffer.toString("utf8");
+      const docTitle = title?.trim() || file.originalname;
+
+      // insert doc
+      const { data: docRow, error: docErr } = await supabase
+        .from("kb_docs")
+        .insert({
+          title: docTitle,
+          source_type,
+          source_url,
+          vertical,
+          shipper,
+          tags: tagList.length ? tagList : null
+        })
+        .select("id")
+        .single();
+      if (docErr) throw docErr;
+      const doc_id = docRow.id;
+
+      const chunks = chunkText(raw); // conservative chunker
+      let idx = 0;
+      for (const chunk of chunks) {
+        const emb = await embedOne(chunk);                // one-by-one (memory safe)
+        const { error: chErr } = await supabase
+          .from("kb_chunks")
+          .insert({ doc_id, chunk_index: idx, text: chunk, embedding: emb });
+        if (chErr) throw chErr;
+        idx += 1;
+      }
+
+      results.push({ filename: file.originalname, status: "ok", chunks: chunks.length });
+    }
+
+    res.json({ ok: true, results });
+  } catch (e) {
+    console.error("Admin upload error:", e);
+    res.status(500).json({ error: "Upload failed", detail: e.message || "unknown error" });
+  }
+});
+
+// ----- Static routes for card pages -----
 app.get("/sales.html", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "sales.html"));
 });
 app.get("/ops.html", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "ops.html"));
 });
-
-// Pretty URLs (optional)
 app.get("/sales", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "sales.html"));
 });
@@ -284,12 +374,16 @@ app.get("/ops", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "ops.html"));
 });
 
-// ----- Frontend fallback (root) -----
+// Admin page
+app.get("/admin", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "admin.html"));
+});
+
+// Root
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
-// ----- Start server -----
 app.listen(PORT, () => {
   console.log(`Fr8Coach running on port ${PORT}`);
 });
