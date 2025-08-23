@@ -1,7 +1,7 @@
 // server.js (CommonJS, Render-ready)
 // Password-gated APIs, Sales/Ops cards (Supabase), history-aware coach,
-// optional People Finder via SerpAPI. Company focus: ShipWMT (shipwmt.com)
-// Adds explicit routes for /sales.html, /ops.html and pretty URLs /sales, /ops.
+// optional People Finder via SerpAPI. Company name in replies: Windmill Transport (shipwmt.com).
+// Explicit routes for /sales.html, /ops.html and pretty URLs /sales, /ops.
 
 const express = require("express");
 const cors = require("cors");
@@ -127,14 +127,14 @@ function detectCompany(prompt, history) {
 
 // ----- Coach (OpenAI) -----
 // Accepts: { prompt, history? [{role:'user'|'assistant', content:string}] }
-// Focus: ShipWMT Coaching
+// Company name in replies: Windmill Transport (shipwmt.com)
 app.post("/api/coach", async (req, res) => {
   try {
     const { prompt, history } = req.body || {};
     if (!prompt) return res.status(400).json({ error: "Missing prompt" });
     const q = (prompt || "").trim();
 
-    // 1) KB retrieval (prioritize ShipWMT Coaching, then Industry Insights)
+    // 1) KB retrieval (prioritize Windmill Transport coaching, then Industry Insights)
     async function fetchNotes(topic, limit = 6) {
       if (!supabase) return [];
       const { data, error } = await supabase
@@ -148,23 +148,23 @@ app.post("/api/coach", async (req, res) => {
       return data;
     }
 
-    const shipMatches     = await fetchNotes("ShipWMT Coaching", 6);
+    const windmillMatches = await fetchNotes("ShipWMT Coaching", 6); // table topic remains as created
     const industryMatches = await fetchNotes("Industry Insights", 6);
 
-    let shipFallback = [];
-    if (shipMatches.length === 0 && supabase) {
+    let windmillFallback = [];
+    if (windmillMatches.length === 0 && supabase) {
       const { data } = await supabase
         .from("kb_notes")
         .select("topic, content, created_at")
         .eq("topic", "ShipWMT Coaching")
         .order("created_at", { ascending: false })
         .limit(2);
-      shipFallback = data || [];
+      windmillFallback = data || [];
     }
 
     const blended = [
-      ...shipMatches.slice(0, 4),
-      ...shipFallback.slice(0, Math.max(0, 4 - shipMatches.length)),
+      ...windmillMatches.slice(0, 4),
+      ...windmillFallback.slice(0, Math.max(0, 4 - windmillMatches.length)),
       ...industryMatches.slice(0, 2)
     ].filter(Boolean);
 
@@ -202,7 +202,7 @@ app.post("/api/coach", async (req, res) => {
       // If no SERPAPI_KEY or no company found, skip silently.
     } catch (_) { /* ignore people errors so coach still replies */ }
 
-    // 3) System message (ShipWMT-focused)
+    // 3) System message (Windmill Transport-focused)
     const approvedSources = [
       "Internal SOPs/KB (ShipWMT Coaching)",
       "Sales creators: Darren McKee, Jacob Karp, Will Jenkins, Stephen Mathis, Kevin Dorsey",
@@ -212,12 +212,12 @@ app.post("/api/coach", async (req, res) => {
 
     const contextBlock =
       (blended.length
-        ? `Context snippets (prioritized: ShipWMT Coaching):\n` +
+        ? `Context snippets (prioritized: Windmill Transport coaching):\n` +
           blended.map((n, i) => `[${i + 1}] (${n.topic}) ${n.content}`).join("\n---\n")
-        : `No KB matches found; prefer ShipWMT Coaching guidance and approved sources.`) +
+        : `No KB matches found; prefer Windmill Transport coaching guidance and approved sources.`) +
       (peopleBlock ? `\n---\n${peopleBlock}` : "");
 
-    const systemMsg = `You are Fr8Coach, an expert freight brokerage coach for employees of ShipWMT (shipwmt.com).
+    const systemMsg = `You are Fr8Coach, an expert freight brokerage coach for employees of Windmill Transport (shipwmt.com).
 Emphasize: disciplined prospecting & sequencing, one-lane trials with explicit success criteria, proactive track-and-trace, carrier vetting & scorecards, margin protection, clear escalation/SOPs, and data-backed context (DAT, SONAR).
 Approved sources (priority): ${approvedSources}
 Style: concise checklists, concrete scripts, measurable next steps.
