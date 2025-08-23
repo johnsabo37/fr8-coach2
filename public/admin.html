@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Fr8Coach Admin Upload</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:#0b0f17; color:#e6e6e6; margin:0; }
+    .wrap { max-width: 880px; margin: 40px auto; padding: 24px; background:#111827; border-radius:16px; border:1px solid #233046; }
+    h1 { margin:0 0 10px; font-weight:700; text-align:center; }
+    p.sub { color:#9aa7bd; text-align:center; margin:0 0 24px; }
+    label { display:block; font-size:14px; margin:14px 0 6px; color:#c7d2fe; }
+    input[type="text"], input[type="url"], textarea, select {
+      width:100%; padding:10px 12px; border-radius:10px; border:1px solid #2b3a55; background:#0f1623; color:#e6e6e6;
+    }
+    input[type="file"] {
+      width:100%; padding:10px; border-radius:10px; border:1px dashed #2b3a55; background:#0f1623; color:#9aa7bd;
+    }
+    button {
+      background:#2563eb; color:white; border:none; padding:12px 16px; border-radius:10px; margin-top:16px; cursor:pointer;
+    }
+    button:hover { background:#1d4ed8; }
+    .row { display:grid; grid-template-columns: 1fr 1fr; gap:14px; }
+    .note { font-size:12px; color:#9aa7bd; }
+    .result { white-space:pre-wrap; background:#0f1623; border:1px solid #2b3a55; padding:12px; border-radius:10px; margin-top:16px; }
+    .pw { text-align:center; margin-bottom:16px; }
+    .pw input { max-width: 320px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Fr8Coach — Admin Upload</h1>
+    <p class="sub">Upload .txt / .md files to the knowledge base. (Password required.)</p>
+
+    <div class="pw">
+      <label>Site Password</label>
+      <input id="pw" type="password" placeholder="Enter the same password used on the site"/>
+      <button id="savePw">Save Password</button>
+      <div class="note">This is stored locally in your browser as <code>FR8COACH_PW</code>.</div>
+    </div>
+
+    <form id="upform">
+      <label>Files (.txt or .md, up to 10 files)</label>
+      <input id="files" type="file" accept=".txt,.md,text/plain,text/markdown" multiple required />
+
+      <div class="row">
+        <div>
+          <label>Title (optional — defaults to filename)</label>
+          <input id="title" type="text" placeholder="e.g., Retail Prospecting SOP"/>
+        </div>
+        <div>
+          <label>Source Type</label>
+          <select id="source_type">
+            <option value="SOP" selected>SOP</option>
+            <option value="Playbook">Playbook</option>
+            <option value="Deck">Deck</option>
+            <option value="Policy">Policy</option>
+            <option value="Template">Template</option>
+            <option value="News">News</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>Source URL (optional)</label>
+          <input id="source_url" type="url" placeholder="https://..."/>
+        </div>
+        <div>
+          <label>Vertical</label>
+          <input id="vertical" type="text" value="General"/>
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>Shipper</label>
+          <input id="shipper" type="text" value="Windmill Transport"/>
+        </div>
+        <div>
+          <label>Tags (comma-separated)</label>
+          <input id="tags" type="text" placeholder="sales, prospecting, retail"/>
+        </div>
+      </div>
+
+      <button type="submit">Upload</button>
+    </form>
+
+    <div id="out" class="result" style="display:none"></div>
+  </div>
+
+  <script>
+    // Save password locally
+    const pwEl = document.getElementById('pw');
+    const saveBtn = document.getElementById('savePw');
+    const saved = localStorage.getItem('FR8COACH_PW');
+    if (saved) pwEl.value = saved;
+    saveBtn.onclick = () => {
+      const v = pwEl.value.trim();
+      if (!v) return alert('Enter a password first.');
+      localStorage.setItem('FR8COACH_PW', v);
+      alert('Saved.');
+    };
+
+    const out = document.getElementById('out');
+    const form = document.getElementById('upform');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const pw = localStorage.getItem('FR8COACH_PW') || pwEl.value.trim();
+      if (!pw) return alert('Please enter/save the site password first.');
+
+      const fd = new FormData();
+      const files = document.getElementById('files').files;
+      if (!files || !files.length) return alert('Pick at least one file.');
+      for (const f of files) fd.append('files', f);
+
+      fd.append('title', document.getElementById('title').value.trim());
+      fd.append('source_type', document.getElementById('source_type').value);
+      fd.append('source_url', document.getElementById('source_url').value.trim());
+      fd.append('vertical', document.getElementById('vertical').value.trim());
+      fd.append('shipper', document.getElementById('shipper').value.trim());
+      fd.append('tags', document.getElementById('tags').value.trim());
+
+      out.style.display = 'block';
+      out.textContent = 'Uploading...';
+
+      try {
+        const resp = await fetch('/api/admin/upload', {
+          method: 'POST',
+          headers: { 'x-site-password': pw },
+          body: fd
+        });
+        const data = await resp.json();
+        out.textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        out.textContent = 'Upload failed: ' + (err?.message || String(err));
+      }
+    });
+  </script>
+</body>
+</html>
