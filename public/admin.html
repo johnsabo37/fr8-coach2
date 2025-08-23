@@ -10,7 +10,7 @@
     h1 { margin:0 0 10px; font-weight:700; text-align:center; }
     p.sub { color:#9aa7bd; text-align:center; margin:0 0 24px; }
     label { display:block; font-size:14px; margin:14px 0 6px; color:#c7d2fe; }
-    input[type="text"], input[type="url"], textarea, select {
+    input[type="text"], input[type="url"], textarea, select, input[type="password"] {
       width:100%; padding:10px 12px; border-radius:10px; border:1px solid #2b3a55; background:#0f1623; color:#e6e6e6;
     }
     input[type="file"] {
@@ -30,13 +30,13 @@
 <body>
   <div class="wrap">
     <h1>Fr8Coach — Admin Upload</h1>
-    <p class="sub">Upload .txt / .md files to the knowledge base. (Password required.)</p>
+    <p class="sub">Upload .txt / .md files to the knowledge base. (Admin password required.)</p>
 
     <div class="pw">
-      <label>Site Password</label>
-      <input id="pw" type="password" placeholder="Enter the same password used on the site"/>
-      <button id="savePw">Save Password</button>
-      <div class="note">This is stored locally in your browser as <code>FR8COACH_PW</code>.</div>
+      <label>Admin Password</label>
+      <input id="pw" type="password" placeholder="Enter the ADMIN password"/>
+      <button id="savePw">Save Admin Password</button>
+      <div class="note">Stored locally in your browser as <code>FR8COACH_ADMIN_PW</code>.</div>
     </div>
 
     <form id="upform">
@@ -91,15 +91,15 @@
   </div>
 
   <script>
-    // Save password locally
+    // Store separate ADMIN password locally
     const pwEl = document.getElementById('pw');
     const saveBtn = document.getElementById('savePw');
-    const saved = localStorage.getItem('FR8COACH_PW');
+    const saved = localStorage.getItem('FR8COACH_ADMIN_PW');
     if (saved) pwEl.value = saved;
     saveBtn.onclick = () => {
       const v = pwEl.value.trim();
-      if (!v) return alert('Enter a password first.');
-      localStorage.setItem('FR8COACH_PW', v);
+      if (!v) return alert('Enter an admin password first.');
+      localStorage.setItem('FR8COACH_ADMIN_PW', v);
       alert('Saved.');
     };
 
@@ -108,8 +108,8 @@
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const pw = localStorage.getItem('FR8COACH_PW') || pwEl.value.trim();
-      if (!pw) return alert('Please enter/save the site password first.');
+      const adminPw = localStorage.getItem('FR8COACH_ADMIN_PW') || pwEl.value.trim();
+      if (!adminPw) return alert('Please enter/save the ADMIN password first.');
 
       const fd = new FormData();
       const files = document.getElementById('files').files;
@@ -129,7 +129,7 @@
       try {
         const resp = await fetch('/api/admin/upload', {
           method: 'POST',
-          headers: { 'x-site-password': pw },
+          headers: { 'x-admin-password': adminPw }, // <-- separate header
           body: fd
         });
         const data = await resp.json();
