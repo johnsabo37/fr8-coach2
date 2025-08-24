@@ -99,8 +99,7 @@
         <div class="composer">
           <textarea id="q" placeholder="Ask the Coach a question...
 ex) what is a good social selling strategy to help get set up with Home Depot?
-ex) send me leads
-></textarea>
+ex) send me leads"></textarea>
           <div class="composer-buttons">
             <button id="ask">Send</button>
             <button id="clearChat" class="secondary">Clear Conversation</button>
@@ -119,7 +118,7 @@ ex) send me leads
   </section>
 
   <script>
-    // ---------- Password gate logic ----------
+    // ---------- Password gate logic (uses /api/ping) ----------
     const gate = document.getElementById('gate');
     const app  = document.getElementById('app');
     const pwIn = document.getElementById('pw');
@@ -141,8 +140,9 @@ ex) send me leads
 
     async function tryProtected(pw){
       try {
-        const r = await fetch('/api/cards?type=sales', { headers: { 'x-site-password': pw } });
-        return r.status !== 401;
+        // Use /api/ping so we only test auth (not data fetch)
+        const r = await fetch('/api/ping', { headers: { 'x-site-password': pw } });
+        return r.status !== 401; // true if accepted
       } catch { return false; }
     }
 
@@ -250,7 +250,7 @@ ex) send me leads
       }
     };
   </script>
-<script src="/auth-gate.js"></script>
-<script src="/auth-gate-robust.js"></script>
+  <!-- IMPORTANT: remove conflicting auth scripts -->
+  <!-- (No <script src="/auth-gate.js"> or /auth-gate-robust.js here) -->
 </body>
 </html>
