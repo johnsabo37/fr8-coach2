@@ -1,25 +1,26 @@
-// server.js — FULL VERSION with Admin password, Leads handling in coach, and upload API
+// server.js — FULL VERSION with admin auth helpers + ping + leads + upload API
 
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
 const multer = require("multer");
+const crypto = require("crypto");
 
 const { createClient } = require("@supabase/supabase-js");
 const OpenAI = require("openai");
 
-// ----- Env -----
+// ===== Env =====
 const PORT = process.env.PORT || 10000;
 const SITE_PASSWORD = process.env.SITE_PASSWORD || "";
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || ""; // separate admin secret
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_KEY = process.env.SUPABASE_KEY || "";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const SERPAPI_KEY = process.env.SERPAPI_KEY || ""; // optional
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || "text-embedding-3-small"; // 1536-dim
 
-// ----- App -----
+// ===== App =====
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -32,16 +33,46 @@ const supabase = (SUPABASE_URL && SUPABASE_KEY)
 const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 
 // Health
-app.get("/api/ping", (req, res) => res.json({ ok: true, message: "pong" }));
+app.get("/api/ping", (_req, res) => res.json({ ok: true, message: "pong" }));
 
 // Gate non-admin /api routes with SITE_PASSWORD
 app.use("/api", (req, res, next) => {
   if (req.path === "/ping") return next();
-  if (req.path.startsWith("/admin/")) return next(); // admin handled below
+  if (req.path.startsWith("/admin/")) return next(); // admin handled by separate auth below
   if (req.headers["x-site-password"] !== SITE_PASSWORD) {
     return res.status(401).json({ error: "Unauthorized" });
   }
   next();
+});
+
+// ===== Admin AUTH helpers (simple & safe) =====
+function normalizeSecret(s) {
+  if (typeof s !== "string") return "";
+  // strip accidental quotes, normalize unicode, trim whitespace
+  const unquoted = s.replace(/^["']|["']$/g, "");
+  return unquoted.normalize("NFKC").trim();
+}
+const ADMIN_SECRET = normalizeSecret(ADMIN_PASSWORD || "");
+if (!ADMIN_SECRET) {
+  console.warn("[AdminAuth] ADMIN_PASSWORD is EMPTY or not set.");
+} else {
+  console.log(`[AdminAuth] ADMIN_PASSWORD is configured (len=${ADMIN_SECRET.length}).`);
+}
+function timingSafeEqualAtoB(a, b) {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
+function isAdminAuthorized(req) {
+  const hdr = normalizeSecret(req.headers["x-admin-password"] || "");
+  if (!ADMIN_SECRET || !hdr) return false;
+  return timingSafeEqualAtoB(hdr, ADMIN_SECRET);
+}
+// Quick admin ping endpoint (to test password without uploading files)
+app.get("/api/admin/ping", (req, res) => {
+  if (!isAdminAuthorized(req)) return res.status(401).json({ ok: false, error: "Unauthorized (admin)" });
+  return res.json({ ok: true, admin: true });
 });
 
 // ===== Helpers =====
@@ -76,7 +107,6 @@ function isLeadsRequest(q = "") {
 }
 async function getRandomLeadCompanies(limit = 10) {
   if (!supabase) return [];
-  // Fetch up to 200 docs labeled "Leads", gather 'shipper' (Company), de-dupe and randomize in memory
   const { data, error } = await supabase
     .from("kb_docs")
     .select("shipper")
@@ -84,60 +114,13 @@ async function getRandomLeadCompanies(limit = 10) {
     .not("shipper", "is", null)
     .limit(200);
   if (error || !data) return [];
-  const names = data
-    .map(r => (r.shipper || "").trim())
-    .filter(Boolean);
+  const names = data.map(r => (r.shipper || "").trim()).filter(Boolean);
   const unique = Array.from(new Set(names));
   shuffleInPlace(unique);
   return unique.slice(0, limit);
 }
 
-// ----- Cards (sales/ops) -----
-app.get("/api/cards", async (req, res) => {
-  try {
-    if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
-    const type = (req.query.type || "sales").toLowerCase();
-    const table = type === "ops" ? "ops_cards" : "sales_cards";
-    const { data, error } = await supabase
-      .from(table)
-      .select("*")
-      .order("priority", { ascending: false })
-      .order("created_at", { ascending: false })
-      .limit(8);
-    if (error) throw error;
-    res.json({ source: table, cards: data || [] });
-  } catch (e) {
-    console.error("Supabase error:", e.message || e);
-    res.status(500).json({ error: "Supabase query failed" });
-  }
-});
-
-// ----- KB hybrid search API -----
-app.post("/api/kb/search", async (req, res) => {
-  try {
-    if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
-    if (!openai)   return res.status(500).json({ error: "OpenAI not configured" });
-    const { q, limit = 8 } = req.body || {};
-    if (!q || !q.trim()) return res.status(400).json({ error: "Missing q" });
-
-    const emb = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: q });
-    const queryEmbedding = emb.data?.[0]?.embedding;
-    const { data, error } = await supabase.rpc("kb_hybrid_search", {
-      query_embedding: queryEmbedding,
-      query_text: q,
-      limit_n: limit,
-      w_vec: 0.6,
-      w_kw: 0.4
-    });
-    if (error) throw error;
-    res.json({ results: data || [] });
-  } catch (e) {
-    console.error("kb/search error:", e.message || e);
-    res.status(500).json({ error: "KB search failed" });
-  }
-});
-
-// ----- People Finder helpers (optional SerpAPI) -----
+// ===== People Finder helpers (optional SERPAPI) =====
 function normalizeCompany(c) {
   if (!c) return "";
   let s = c.trim().replace(/[?.,;:]+$/g, "");
@@ -186,7 +169,52 @@ function detectCompany(prompt, history) {
   return null;
 }
 
-// ----- Coach (handles "leads" requests + KB + optional People Finder) -----
+// ===== Cards (sales/ops) =====
+app.get("/api/cards", async (req, res) => {
+  try {
+    if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
+    const type = (req.query.type || "sales").toLowerCase();
+    const table = type === "ops" ? "ops_cards" : "sales_cards";
+    const { data, error } = await supabase
+      .from(table)
+      .select("*")
+      .order("priority", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(8);
+    if (error) throw error;
+    res.json({ source: table, cards: data || [] });
+  } catch (e) {
+    console.error("Supabase error:", e.message || e);
+    res.status(500).json({ error: "Supabase query failed" });
+  }
+});
+
+// ===== KB hybrid search API =====
+app.post("/api/kb/search", async (req, res) => {
+  try {
+    if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
+    if (!openai)   return res.status(500).json({ error: "OpenAI not configured" });
+    const { q, limit = 8 } = req.body || {};
+    if (!q || !q.trim()) return res.status(400).json({ error: "Missing q" });
+
+    const emb = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: q });
+    const queryEmbedding = emb.data?.[0]?.embedding;
+    const { data, error } = await supabase.rpc("kb_hybrid_search", {
+      query_embedding: queryEmbedding,
+      query_text: q,
+      limit_n: limit,
+      w_vec: 0.6,
+      w_kw: 0.4
+    });
+    if (error) throw error;
+    res.json({ results: data || [] });
+  } catch (e) {
+    console.error("kb/search error:", e.message || e);
+    res.status(500).json({ error: "KB search failed" });
+  }
+});
+
+// ===== Coach (handles Leads requests + KB + optional People Finder) =====
 app.post("/api/coach", async (req, res) => {
   try {
     const { prompt, history } = req.body || {};
@@ -194,7 +222,7 @@ app.post("/api/coach", async (req, res) => {
     const q = (prompt || "").trim();
     if (!openai) return res.status(500).json({ error: "OpenAI not configured" });
 
-    // NEW: If user is asking for leads, return 10 random companies from Leads docs
+    // If user is asking for leads, return 10 random company names from Leads docs
     if (isLeadsRequest(q)) {
       const leads = await getRandomLeadCompanies(10);
       if (leads.length === 0) {
@@ -208,7 +236,7 @@ app.post("/api/coach", async (req, res) => {
       });
     }
 
-    // 1) KB retrieval
+    // KB retrieval
     let kbResults = [];
     try {
       const emb = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: q });
@@ -232,7 +260,7 @@ app.post("/api/coach", async (req, res) => {
       return `${label}${link}\n${snippet}…`;
     }).join('\n---\n');
 
-    // 2) People finder (optional, if SERPAPI_KEY set)
+    // People finder (optional)
     let peopleBlock = "";
     try {
       const company = detectCompany(prompt, history);
@@ -325,7 +353,7 @@ Playbook:
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } }); // 2MB/file
 app.post("/api/admin/upload", upload.array("files", 10), async (req, res) => {
   try {
-    if (req.headers["x-admin-password"] !== ADMIN_PASSWORD) {
+    if (!isAdminAuthorized(req)) {
       return res.status(401).json({ error: "Unauthorized (admin)" });
     }
     if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
@@ -397,7 +425,7 @@ app.post("/api/admin/upload", upload.array("files", 10), async (req, res) => {
   }
 });
 
-// ----- Static routes -----
+// ===== Static routes =====
 app.get("/sales.html", (_req, res) => res.sendFile(path.join(__dirname, "public", "sales.html")));
 app.get("/ops.html", (_req, res) => res.sendFile(path.join(__dirname, "public", "ops.html")));
 app.get("/sales", (_req, res) => res.sendFile(path.join(__dirname, "public", "sales.html")));
