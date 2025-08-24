@@ -1,4 +1,4 @@
-// server.js — FULL, CLEAN VERSION with separate ADMIN_PASSWORD for /api/admin/*
+// server.js — FULL VERSION with Admin password, Leads handling in coach, and upload API
 
 require("dotenv").config();
 const express = require("express");
@@ -12,7 +12,7 @@ const OpenAI = require("openai");
 // ----- Env -----
 const PORT = process.env.PORT || 10000;
 const SITE_PASSWORD = process.env.SITE_PASSWORD || "";
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || ""; // <-- separate admin secret
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_KEY = process.env.SUPABASE_KEY || "";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
@@ -34,13 +34,10 @@ const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 // Health
 app.get("/api/ping", (req, res) => res.json({ ok: true, message: "pong" }));
 
-// Gate all regular /api routes with the SITE_PASSWORD
+// Gate non-admin /api routes with SITE_PASSWORD
 app.use("/api", (req, res, next) => {
   if (req.path === "/ping") return next();
-
-  // Allow admin routes to be handled by their own middleware (below).
-  if (req.path.startsWith("/admin/")) return next();
-
+  if (req.path.startsWith("/admin/")) return next(); // admin handled below
   if (req.headers["x-site-password"] !== SITE_PASSWORD) {
     return res.status(401).json({ error: "Unauthorized" });
   }
@@ -66,6 +63,34 @@ async function embedOne(text) {
   const r = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: text });
   return r.data[0].embedding;
 }
+function shuffleInPlace(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+function isLeadsRequest(q = "") {
+  const s = q.toLowerCase();
+  return /\bleads?\b/.test(s) || /prospect lists?/.test(s) || /give me .*companies?/.test(s);
+}
+async function getRandomLeadCompanies(limit = 10) {
+  if (!supabase) return [];
+  // Fetch up to 200 docs labeled "Leads", gather 'shipper' (Company), de-dupe and randomize in memory
+  const { data, error } = await supabase
+    .from("kb_docs")
+    .select("shipper")
+    .eq("source_type", "Leads")
+    .not("shipper", "is", null)
+    .limit(200);
+  if (error || !data) return [];
+  const names = data
+    .map(r => (r.shipper || "").trim())
+    .filter(Boolean);
+  const unique = Array.from(new Set(names));
+  shuffleInPlace(unique);
+  return unique.slice(0, limit);
+}
 
 // ----- Cards (sales/ops) -----
 app.get("/api/cards", async (req, res) => {
@@ -88,7 +113,6 @@ app.get("/api/cards", async (req, res) => {
 });
 
 // ----- KB hybrid search API -----
-// POST /api/kb/search { q, limit? }
 app.post("/api/kb/search", async (req, res) => {
   try {
     if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
@@ -162,13 +186,27 @@ function detectCompany(prompt, history) {
   return null;
 }
 
-// ----- Coach (KB + optional People Finder) -----
+// ----- Coach (handles "leads" requests + KB + optional People Finder) -----
 app.post("/api/coach", async (req, res) => {
   try {
     const { prompt, history } = req.body || {};
     if (!prompt) return res.status(400).json({ error: "Missing prompt" });
     const q = (prompt || "").trim();
     if (!openai) return res.status(500).json({ error: "OpenAI not configured" });
+
+    // NEW: If user is asking for leads, return 10 random companies from Leads docs
+    if (isLeadsRequest(q)) {
+      const leads = await getRandomLeadCompanies(10);
+      if (leads.length === 0) {
+        return res.json({
+          reply: `No leads found yet. To add leads: go to /admin, choose Source Type “Leads”, and set the Company field for each upload.`
+        });
+      }
+      const list = leads.map((c, i) => `${i + 1}. ${c}`).join("\n");
+      return res.json({
+        reply: `Here are 10 leads from your library:\n\n${list}\n\nNext steps:\n- Pick 3–5 for a one-lane trial outreach.\n- Use your retail prospecting sequence and book time to review outcomes.`
+      });
+    }
 
     // 1) KB retrieval
     let kbResults = [];
@@ -194,7 +232,7 @@ app.post("/api/coach", async (req, res) => {
       return `${label}${link}\n${snippet}…`;
     }).join('\n---\n');
 
-    // 2) People finder (optional)
+    // 2) People finder (optional, if SERPAPI_KEY set)
     let peopleBlock = "";
     try {
       const company = detectCompany(prompt, history);
@@ -283,11 +321,10 @@ Playbook:
   }
 });
 
-// ===== Admin Upload API — now requires x-admin-password header =====
+// ===== Admin Upload API — requires x-admin-password =====
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } }); // 2MB/file
 app.post("/api/admin/upload", upload.array("files", 10), async (req, res) => {
   try {
-    // Check separate admin password
     if (req.headers["x-admin-password"] !== ADMIN_PASSWORD) {
       return res.status(401).json({ error: "Unauthorized (admin)" });
     }
