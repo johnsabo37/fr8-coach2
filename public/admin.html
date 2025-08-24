@@ -78,6 +78,7 @@
               <option value="Policy">Policy</option>
               <option value="Template">Template</option>
               <option value="News">News</option>
+              <option value="Leads">Leads</option>
               <option value="Other">Other</option>
             </select>
           </div>
@@ -96,7 +97,7 @@
 
         <div class="row">
           <div>
-            <label>Company</label> <!-- renamed from Shipper -->
+            <label>Company</label>
             <input id="shipper" type="text" value="Windmill Transport"/>
           </div>
           <div>
@@ -130,7 +131,6 @@
     const out = document.getElementById('out');
     const form = document.getElementById('upform');
 
-    // Always start at the gate (no persistence)
     function showGate() {
       ADMIN_PW = null;
       pwEl.value = '';
@@ -145,15 +145,13 @@
     }
     showGate();
 
-    // Enter password -> keep only in memory -> switch view
     enterBtn.onclick = () => {
       const v = pwEl.value.trim();
       if (!v) { alert('Please enter a password.'); return; }
-      ADMIN_PW = v; // memory only, not stored
+      ADMIN_PW = v; // memory only
       showUploader();
     };
 
-    // Log out -> forget in-memory password and return to gate
     logoutBtn.onclick = () => {
       ADMIN_PW = null;
       out.classList.add('hidden');
@@ -161,7 +159,6 @@
       showGate();
     };
 
-    // Upload handler
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!ADMIN_PW) {
@@ -188,7 +185,7 @@
       try {
         const resp = await fetch('/api/admin/upload', {
           method: 'POST',
-          headers: { 'x-admin-password': ADMIN_PW }, // separate admin header
+          headers: { 'x-admin-password': ADMIN_PW },
           body: fd
         });
         const data = await resp.json();
