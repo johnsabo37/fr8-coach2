@@ -1,4 +1,4 @@
-// server.js — FULL VERSION with admin auth helpers + ping + leads + upload API
+// server.js — FULL VERSION with admin auth helpers + ping + bulk "Leads" ingestion + leads in coach
 
 require("dotenv").config();
 const express = require("express");
@@ -45,10 +45,9 @@ app.use("/api", (req, res, next) => {
   next();
 });
 
-// ===== Admin AUTH helpers (simple & safe) =====
+// ===== Admin AUTH helpers =====
 function normalizeSecret(s) {
   if (typeof s !== "string") return "";
-  // strip accidental quotes, normalize unicode, trim whitespace
   const unquoted = s.replace(/^["']|["']$/g, "");
   return unquoted.normalize("NFKC").trim();
 }
@@ -69,6 +68,7 @@ function isAdminAuthorized(req) {
   if (!ADMIN_SECRET || !hdr) return false;
   return timingSafeEqualAtoB(hdr, ADMIN_SECRET);
 }
+
 // Quick admin ping endpoint (to test password without uploading files)
 app.get("/api/admin/ping", (req, res) => {
   if (!isAdminAuthorized(req)) return res.status(401).json({ ok: false, error: "Unauthorized (admin)" });
@@ -112,7 +112,7 @@ async function getRandomLeadCompanies(limit = 10) {
     .select("shipper")
     .eq("source_type", "Leads")
     .not("shipper", "is", null)
-    .limit(200);
+    .limit(2000);
   if (error || !data) return [];
   const names = data.map(r => (r.shipper || "").trim()).filter(Boolean);
   const unique = Array.from(new Set(names));
@@ -227,7 +227,7 @@ app.post("/api/coach", async (req, res) => {
       const leads = await getRandomLeadCompanies(10);
       if (leads.length === 0) {
         return res.json({
-          reply: `No leads found yet. To add leads: go to /admin, choose Source Type “Leads”, and set the Company field for each upload.`
+          reply: `No leads found yet. To add leads: go to /admin, choose Source Type “Leads”, and upload a .txt file with ONE COMPANY PER LINE.`
         });
       }
       const list = leads.map((c, i) => `${i + 1}. ${c}`).join("\n");
@@ -349,7 +349,7 @@ Playbook:
   }
 });
 
-// ===== Admin Upload API — requires x-admin-password =====
+// ===== Admin Upload API — with bulk "Leads" ingestion =====
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } }); // 2MB/file
 app.post("/api/admin/upload", upload.array("files", 10), async (req, res) => {
   try {
@@ -357,14 +357,16 @@ app.post("/api/admin/upload", upload.array("files", 10), async (req, res) => {
       return res.status(401).json({ error: "Unauthorized (admin)" });
     }
     if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
-    if (!openai)   return res.status(500).json({ error: "OpenAI not configured" });
+    // OpenAI is only needed for non-Leads embeddings; okay if absent for Leads-only uploads
+    const needAI = req.body?.source_type !== "Leads";
+    if (needAI && !openai)   return res.status(500).json({ error: "OpenAI not configured" });
 
-    const {
+    let {
       title,
       source_type = "SOP",
       source_url = null,
       vertical = "General",
-      shipper = "Windmill Transport",
+      shipper = "Windmill Transport", // "Company"
       tags = ""
     } = req.body || {};
 
@@ -387,6 +389,43 @@ app.post("/api/admin/upload", upload.array("files", 10), async (req, res) => {
       }
 
       const raw = file.buffer.toString("utf8");
+
+      // NEW: Bulk leads ingestion (one company per line, no embeddings)
+      if ((source_type || "").toLowerCase() === "leads") {
+        const lines = raw
+          .split(/\r?\n/)
+          .map(s => s.trim())
+          .filter(s => s.length > 0 && !/^\s*(#|\/\/)/.test(s)); // drop blanks and comments
+        // de-dup within this file
+        const unique = Array.from(new Set(lines));
+        let inserted = 0;
+
+        // Optional: if "shipper" form field was filled, treat it as a default tag
+        const mergedTags = tagList.length ? tagList : ["leads"];
+
+        // Insert in small batches to avoid timeouts
+        const BATCH = 100;
+        for (let i = 0; i < unique.length; i += BATCH) {
+          const slice = unique.slice(i, i + BATCH).map(companyName => ({
+            title: title ? `${title} — ${companyName}` : `${companyName} (Lead)`,
+            source_type: "Leads",
+            source_url,
+            vertical,
+            shipper: companyName, // each line becomes the Company
+            tags: mergedTags
+          }));
+          const { error: insErr, count } = await supabase
+            .from("kb_docs")
+            .insert(slice, { count: "exact" });
+          if (insErr) throw insErr;
+          inserted += slice.length;
+        }
+
+        results.push({ filename: file.originalname, status: "ok", leads_added: inserted });
+        continue; // skip embeddings for Leads
+      }
+
+      // Default behavior (SOP/Playbook/etc.) — create one doc + chunks + embeddings
       const docTitle = (title && title.trim()) || file.originalname;
 
       const { data: docRow, error: docErr } = await supabase
