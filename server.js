@@ -1,4 +1,6 @@
-// server.js — FULL VERSION with admin auth helpers + ping + bulk "Leads" ingestion + leads in coach
+// server.js — FULL VERSION: admin auth helpers + ping + bulk "Leads" ingestion +
+// smarter People Finder that works after a "leads" reply or when asked to include contacts
+// (expanded matcher: executives, buyers, procurement leads, shipping/transportation managers, etc.)
 
 require("dotenv").config();
 const express = require("express");
@@ -17,7 +19,7 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || ""; // separate admin secre
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_KEY = process.env.SUPABASE_KEY || "";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
-const SERPAPI_KEY = process.env.SERPAPI_KEY || ""; // optional
+const SERPAPI_KEY = process.env.SERPAPI_KEY || ""; // optional for contacts
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || "text-embedding-3-small"; // 1536-dim
 
 // ===== App =====
@@ -105,6 +107,36 @@ function isLeadsRequest(q = "") {
   const s = q.toLowerCase();
   return /\bleads?\b/.test(s) || /prospect lists?/.test(s) || /give me .*companies?/.test(s);
 }
+
+// >>> Expanded contact-intent matcher <<<
+function wantsContacts(q = "") {
+  const s = q.toLowerCase();
+
+  const patterns = [
+    /\bcontacts?\b/,
+    /\bcontact info\b/,
+    /\bdecision makers?\b/,
+    /\bkey people\b/,
+    /\bwho (to|should i) (reach out|contact)\b/,
+
+    // Additional terms you requested:
+    /\bexecutives?\b/,
+    /\bbuyers?\b/,
+    /\bprocurement leads?\b/,
+    /\bprocurement (?:manager|director|head)s?\b/,
+    /\bsupply chain (?:lead|leader|head|manager|director)s?\b/,
+    /\bshipping managers?\b/,
+    /\btransportation managers?\b/,
+
+    // extra useful variants
+    /\blogistics (?:manager|director|head)s?\b/,
+    /\bcarrier (?:manager|relations|procurement)\b/,
+    /\bvender|vendor (?:manager|relations)\b/ // small catch-all (typos/vendor)
+  ];
+
+  return patterns.some(re => re.test(s));
+}
+
 async function getRandomLeadCompanies(limit = 10) {
   if (!supabase) return [];
   const { data, error } = await supabase
@@ -120,7 +152,7 @@ async function getRandomLeadCompanies(limit = 10) {
   return unique.slice(0, limit);
 }
 
-// ===== People Finder helpers (optional SERPAPI) =====
+// ===== People Finder helpers (SERPAPI) =====
 function normalizeCompany(c) {
   if (!c) return "";
   let s = c.trim().replace(/[?.,;:]+$/g, "");
@@ -169,6 +201,43 @@ function detectCompany(prompt, history) {
   return null;
 }
 
+// Extract company list from the previous assistant leads reply
+function extractLeadsFromHistory(history) {
+  if (!Array.isArray(history) || !history.length) return [];
+  const lastAssistant = [...history].reverse().find(m => m.role === "assistant" && typeof m.content === "string");
+  if (!lastAssistant) return [];
+  const lines = lastAssistant.content.split(/\r?\n/);
+  const results = [];
+  for (const line of lines) {
+    const m = line.match(/^\s*(?:-|\d+[.)])\s*["“]?([^"”]+?)["”]?\s*$/);
+    if (m && m[1]) {
+      const name = m[1].trim();
+      if (name && !/next steps/i.test(name)) results.push(name);
+    }
+  }
+  return results;
+}
+
+// Query SerpAPI for up to N contacts at a company
+async function findContactsForCompany(companyName, max = 3) {
+  if (!SERPAPI_KEY || !companyName) return [];
+  const roleQuery =
+    '("transportation" OR "logistics" OR "shipping" OR "supply chain") (sourcing OR procurement OR buyer OR carrier OR delivery OR "supply chain" OR manager OR director OR head)';
+  const q1 = `site:linkedin.com/in "${companyName}" ${roleQuery}`;
+  const url1 = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(q1)}&num=${max}&api_key=${SERPAPI_KEY}`;
+  const r1 = await fetch(url1);
+  if (!r1.ok) return [];
+  const d1 = await r1.json();
+  const items1 = (d1.organic_results || []).slice(0, max);
+  return items1
+    .filter(i => /linkedin\.com\/in\//i.test(i.link || i.url))
+    .map(i => {
+      const title = (i.title || "").replace(/\s+-\s*LinkedIn\s*$/i, "").trim();
+      const link = i.link || i.url || "";
+      return { title, link };
+    });
+}
+
 // ===== Cards (sales/ops) =====
 app.get("/api/cards", async (req, res) => {
   try {
@@ -214,7 +283,7 @@ app.post("/api/kb/search", async (req, res) => {
   }
 });
 
-// ===== Coach (handles Leads requests + KB + optional People Finder) =====
+// ===== Coach (handles Leads + People Finder follow-ups) =====
 app.post("/api/coach", async (req, res) => {
   try {
     const { prompt, history } = req.body || {};
@@ -222,21 +291,95 @@ app.post("/api/coach", async (req, res) => {
     const q = (prompt || "").trim();
     if (!openai) return res.status(500).json({ error: "OpenAI not configured" });
 
-    // If user is asking for leads, return 10 random company names from Leads docs
+    // A) Leads ask — possibly "include contact info"
     if (isLeadsRequest(q)) {
       const leads = await getRandomLeadCompanies(10);
-      if (leads.length === 0) {
+      if (!leads.length) {
         return res.json({
           reply: `No leads found yet. To add leads: go to /admin, choose Source Type “Leads”, and upload a .txt file with ONE COMPANY PER LINE.`
         });
       }
       const list = leads.map((c, i) => `${i + 1}. ${c}`).join("\n");
+
+      // If user also asked for contacts/decision makers, pull a few per company
+      if (wantsContacts(q)) {
+        if (!SERPAPI_KEY) {
+          return res.json({
+            reply:
+`Here are 10 leads from your library:
+
+${list}
+
+To include contact profiles automatically, add a SERPAPI_KEY in Render → Environment (then redeploy).`
+          });
+        }
+        const MAX_COMPANIES = 5; // limit to keep it readable + avoid rate overuse
+        const MAX_CONTACTS_PER = 2;
+        const companiesForContacts = leads.slice(0, MAX_COMPANIES);
+        let out = `Here are 10 leads from your library:\n\n${list}\n\nKey decision makers / contacts (top ${MAX_COMPANIES} companies):\n`;
+        for (const name of companiesForContacts) {
+          const contacts = await findContactsForCompany(name, MAX_CONTACTS_PER);
+          if (contacts.length) {
+            out += `\n• ${name}\n` + contacts.map(c => `  - ${c.title} — ${c.link}`).join("\n");
+          } else {
+            out += `\n• ${name}\n  - (No public profiles found in top results)`;
+          }
+        }
+        out += `\n\nNext steps:\n- Pick 3–5 for one-lane trial outreach.\n- Use your retail prospecting sequence and book time to review outcomes.`;
+        return res.json({ reply: out });
+      }
+
+      // Default: leads only
       return res.json({
-        reply: `Here are 10 leads from your library:\n\n${list}\n\nNext steps:\n- Pick 3–5 for a one-lane trial outreach.\n- Use your retail prospecting sequence and book time to review outcomes.`
+        reply:
+`Here are 10 leads from your library:
+
+${list}
+
+Next steps:
+- Pick 3–5 for a one-lane trial outreach.
+- Use your retail prospecting sequence and book time to review outcomes.`
       });
     }
 
-    // KB retrieval
+    // B) Follow-up "contacts / key decision makers / contact info / executives / shipping manager" after a leads reply
+    if (wantsContacts(q)) {
+      // 1) If a specific company is detected (current prompt/history), use that
+      const explicitCompany = detectCompany(prompt, history);
+      if (explicitCompany) {
+        if (!SERPAPI_KEY) {
+          return res.json({ reply: `I can pull public profiles once a SERPAPI_KEY is set in Render → Environment (then redeploy).` });
+        }
+        const contacts = await findContactsForCompany(explicitCompany, 5);
+        if (!contacts.length) {
+          return res.json({ reply: `No public profiles found for "${explicitCompany}" in top results. Try specifying the exact division or city.` });
+        }
+        const block = contacts.map(c => `- ${c.title} — ${c.link}`).join("\n");
+        return res.json({ reply: `Contacts & intake — ${explicitCompany}:\n${block}` });
+      }
+
+      // 2) Otherwise, try to pull the company list from the most recent assistant leads reply
+      const fromHistory = extractLeadsFromHistory(history).slice(0, 5);
+      if (fromHistory.length) {
+        if (!SERPAPI_KEY) {
+          return res.json({ reply: `I can pull contact profiles for your recent leads once a SERPAPI_KEY is set in Render → Environment.` });
+        }
+        const MAX_CONTACTS_PER = 2;
+        let out = `Contacts / decision makers from your latest leads list:\n`;
+        for (const name of fromHistory) {
+          const contacts = await findContactsForCompany(name, MAX_CONTACTS_PER);
+          if (contacts.length) {
+            out += `\n• ${name}\n` + contacts.map(c => `  - ${c.title} — ${c.link}`).join("\n");
+          } else {
+            out += `\n• ${name}\n  - (No public profiles found in top results)`;
+          }
+        }
+        return res.json({ reply: out });
+      }
+      // 3) No explicit company and no leads in history → generic guidance fallback
+    }
+
+    // ===== KB retrieval (normal coaching) =====
     let kbResults = [];
     try {
       const emb = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: q });
@@ -260,35 +403,6 @@ app.post("/api/coach", async (req, res) => {
       return `${label}${link}\n${snippet}…`;
     }).join('\n---\n');
 
-    // People finder (optional)
-    let peopleBlock = "";
-    try {
-      const company = detectCompany(prompt, history);
-      if (SERPAPI_KEY && company && global.fetch) {
-        const roleQuery =
-          '("transportation" OR "logistics") (sourcing OR procurement OR carrier OR delivery OR "supply chain") manager';
-        async function querySerp(companyName) {
-          const q1 = `site:linkedin.com/in "${companyName}" ${roleQuery}`;
-          const url1 = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(q1)}&num=10&api_key=${SERPAPI_KEY}`;
-          const r1 = await fetch(url1);
-          if (!r1.ok) return [];
-          const d1 = await r1.json();
-          const items1 = (d1.organic_results || []).slice(0, 10);
-          return items1
-            .filter(i => /linkedin\.com\/in\//i.test(i.link || i.url))
-            .map(i => `- ${i.title} — ${i.link || i.url}`);
-        }
-        let people = await querySerp(company);
-        if (!people.length) {
-          const alt = company.replace(/^The\s+/i, "");
-          if (alt && alt !== company) people = await querySerp(alt);
-        }
-        if (people.length) {
-          peopleBlock = `\nContacts & intake — ${company}:\n${people.join("\n")}\n\n`;
-        }
-      }
-    } catch (_) {}
-
     const approvedSources = [
       "Internal SOPs/KB (Windmill Transport coaching)",
       "Sales creators: Darren McKee, Jacob Karp, Will Jenkins, Stephen Mathis, Kevin Dorsey",
@@ -298,8 +412,7 @@ app.post("/api/coach", async (req, res) => {
 
     const contextBlock =
       (citations ? `Context snippets (KB search):\n${citations}` :
-        `No KB matches found; prefer Windmill Transport coaching guidance and approved sources.`) +
-      (peopleBlock ? `\n---\n${peopleBlock}` : "");
+        `No KB matches found; prefer Windmill Transport coaching guidance and approved sources.`);
 
     const systemMsg = `You are Fr8Coach, an expert freight brokerage coach for employees of Windmill Transport (shipwmt.com).
 Emphasize: disciplined prospecting & sequencing, one-lane trials with explicit success criteria, proactive track-and-trace, carrier vetting & scorecards, margin protection, clear escalation/SOPs, and data-backed context (DAT, SONAR).
@@ -331,8 +444,7 @@ ${contextBlock}
     });
 
     const modelText = completion.choices?.[0]?.message?.content || "No reply";
-    const finalReply = (peopleBlock ? peopleBlock : "") + modelText;
-    return res.json({ reply: finalReply });
+    return res.json({ reply: modelText });
   } catch (e) {
     const msg = (e?.error?.message || e?.message || "").toLowerCase();
     if (e?.status === 429 || msg.includes("quota")) {
@@ -390,20 +502,15 @@ app.post("/api/admin/upload", upload.array("files", 10), async (req, res) => {
 
       const raw = file.buffer.toString("utf8");
 
-      // NEW: Bulk leads ingestion (one company per line, no embeddings)
+      // Bulk leads ingestion (one company per line, no embeddings)
       if ((source_type || "").toLowerCase() === "leads") {
         const lines = raw
           .split(/\r?\n/)
           .map(s => s.trim())
-          .filter(s => s.length > 0 && !/^\s*(#|\/\/)/.test(s)); // drop blanks and comments
-        // de-dup within this file
+          .filter(s => s.length > 0 && !/^\s*(#|\/\/)/.test(s));
         const unique = Array.from(new Set(lines));
         let inserted = 0;
-
-        // Optional: if "shipper" form field was filled, treat it as a default tag
         const mergedTags = tagList.length ? tagList : ["leads"];
-
-        // Insert in small batches to avoid timeouts
         const BATCH = 100;
         for (let i = 0; i < unique.length; i += BATCH) {
           const slice = unique.slice(i, i + BATCH).map(companyName => ({
@@ -411,18 +518,15 @@ app.post("/api/admin/upload", upload.array("files", 10), async (req, res) => {
             source_type: "Leads",
             source_url,
             vertical,
-            shipper: companyName, // each line becomes the Company
+            shipper: companyName,
             tags: mergedTags
           }));
-          const { error: insErr, count } = await supabase
-            .from("kb_docs")
-            .insert(slice, { count: "exact" });
+          const { error: insErr } = await supabase.from("kb_docs").insert(slice);
           if (insErr) throw insErr;
           inserted += slice.length;
         }
-
         results.push({ filename: file.originalname, status: "ok", leads_added: inserted });
-        continue; // skip embeddings for Leads
+        continue;
       }
 
       // Default behavior (SOP/Playbook/etc.) — create one doc + chunks + embeddings
