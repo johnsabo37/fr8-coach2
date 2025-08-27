@@ -1,4 +1,4 @@
-// server.js — randomize leads, tolerant matching, keep existing behavior
+// server.js — true random lead sampling across full set + clean company names
 
 const express = require("express");
 const cors = require("cors");
@@ -61,44 +61,109 @@ app.get("/api/cards", async (req, res) => {
   }
 });
 
-// ===== Helper: fetch random leads (robust to casing/tags) =====
-async function fetchRandomLeads(limit = 10) {
+// ===== Utilities for Leads =====
+
+// Clean a title like 'Lead List 1.1 — "ACME, INC."' into 'ACME, INC.'
+function cleanCompanyTitle(raw) {
+  if (!raw) return "";
+  let t = String(raw).trim();
+
+  // If there is an em dash or hyphen separating list name and company, keep the RHS
+  const dashIdx = t.indexOf("—"); // em dash
+  if (dashIdx >= 0 && dashIdx < t.length - 1) {
+    t = t.slice(dashIdx + 1).trim();
+  } else {
+    // sometimes a hyphen is used instead of em dash with spaces " - "
+    const hyIdx = t.indexOf(" - ");
+    if (hyIdx >= 0 && hyIdx < t.length - 1) t = t.slice(hyIdx + 3).trim();
+  }
+
+  // Strip surrounding quotes if present
+  if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
+    t = t.slice(1, -1).trim();
+  }
+
+  // Remove stray leading/trailing quotes
+  t = t.replace(/^["']+|["']+$/g, "").trim();
+
+  return t;
+}
+
+// Fetch total count for a given filter (exact 'Leads' or ilike/tag fallback)
+async function countLeadsExact() {
+  const { count, error } = await supabase
+    .from("kb_docs")
+    .select("id", { count: "exact", head: true })
+    .eq("source_type", "Leads");
+  if (error) {
+    console.error("countLeadsExact error:", error);
+    return 0;
+  }
+  return count || 0;
+}
+
+async function countLeadsFallback() {
+  const { count, error } = await supabase
+    .from("kb_docs")
+    .select("id", { count: "exact", head: true })
+    .or("source_type.ilike.%lead%,tags.ilike.%lead%");
+  if (error) {
+    console.error("countLeadsFallback error:", error);
+    return 0;
+  }
+  return count || 0;
+}
+
+// Fetch one row by random offset using the given mode
+async function fetchLeadByOffset(offset, mode = "exact") {
+  let query = supabase.from("kb_docs").select("id,title,source_type,tags").range(offset, offset);
+  if (mode === "exact") {
+    query = query.eq("source_type", "Leads");
+  } else {
+    query = query.or("source_type.ilike.%lead%,tags.ilike.%lead%");
+  }
+  const { data, error } = await query;
+  if (error) {
+    console.error("fetchLeadByOffset error:", error);
+    return null;
+  }
+  return (data && data[0]) ? data[0] : null;
+}
+
+// Truly random sample of N leads across the full set
+async function fetchRandomLeadsTrueRandom(n = 10) {
   if (!supabase) return [];
 
-  // 1) Try exact 'Leads'
-  let { data, error } = await supabase
-    .from("kb_docs")
-    .select("id, title, source_type, tags")
-    .eq("source_type", "Leads")
-    .limit(1000); // cap for performance
+  // Try exact 'Leads' first
+  let mode = "exact";
+  let total = await countLeadsExact();
 
-  if (error) {
-    console.error("fetchRandomLeads exact error:", error);
+  // If none found, use fallback (ILIKE / tag)
+  if (!total || total <= 0) {
+    mode = "fallback";
+    total = await countLeadsFallback();
+  }
+  if (!total || total <= 0) return [];
+
+  const picks = [];
+  const seenIds = new Set();
+
+  // Cap attempts to avoid infinite loop if duplicates happen
+  const attemptsMax = n * 8;
+  let attempts = 0;
+
+  while (picks.length < n && attempts < attemptsMax) {
+    attempts++;
+    const randOffset = Math.floor(Math.random() * total); // 0..total-1
+    const row = await fetchLeadByOffset(randOffset, mode);
+    if (!row) continue;
+    if (seenIds.has(row.id)) continue;
+    seenIds.add(row.id);
+    const company = cleanCompanyTitle(row.title);
+    if (company) picks.push(company);
   }
 
-  // 2) If none, try case-insensitive & tag fallback
-  if (!data || data.length === 0) {
-    const { data: data2, error: err2 } = await supabase
-      .from("kb_docs")
-      .select("id, title, source_type, tags")
-      .or("source_type.ilike.%lead%,tags.ilike.%lead%")
-      .limit(1000);
-    if (!err2 && data2) data = data2;
-  }
-
-  if (!data || data.length === 0) return [];
-
-  // 3) Fisher–Yates shuffle (uniform random)
-  for (let i = data.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [data[i], data[j]] = [data[j], data[i]];
-  }
-
-  // 4) Return up to N titles
-  return data
-    .filter(r => r && r.title)
-    .slice(0, limit)
-    .map(r => r.title);
+  return picks;
 }
 
 // ===== Coach =====
@@ -109,9 +174,9 @@ app.post("/api/coach", async (req, res) => {
 
     const q = (prompt || "").trim();
 
-    // Quick path: leads request
+    // Leads request: pull truly random + clean names
     if (/\blead(s)?\b/i.test(q) || /prospect(s)?/i.test(q)) {
-      const leads = await fetchRandomLeads(10);
+      const leads = await fetchRandomLeadsTrueRandom(10);
       if (leads.length === 0) {
         return res.json({
           reply:
@@ -121,7 +186,7 @@ app.post("/api/coach", async (req, res) => {
       return res.json({
         reply:
           "Here are 10 leads from your library:\n\n" +
-          leads.map((c, i) => `${i + 1}. ${JSON.stringify(c)}`).join("\n")
+          leads.map((c, i) => `${i + 1}. ${c}`).join("\n")
       });
     }
 
