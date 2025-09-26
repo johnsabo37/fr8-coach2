@@ -1,64 +1,83 @@
-// server.js
-// Adds site-wide Basic Auth WITHOUT changing your /public files.
-// Username: process.env.SITE_USER (defaults to "user")
-// Password: process.env.SITE_PASSWORD
+// server.js — Fr8Coach
+// Adds site-wide Basic Auth *before* all routes
+// while keeping every existing API and bot feature unchanged.
 
+require("dotenv").config();
 const express = require("express");
+const cors = require("cors");
 const path = require("path");
+const multer = require("multer");
+const crypto = require("crypto");
 
+const { createClient } = require("@supabase/supabase-js");
+const OpenAI = require("openai");
+
+// ===== Env =====
+const PORT = process.env.PORT || 10000;
+const BASIC_USER = process.env.SITE_USER || "user";      // <-- popup username
+const BASIC_PASS = process.env.SITE_PASSWORD || "";      // <-- popup password
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || ""; // admin secret
+const SUPABASE_URL = process.env.SUPABASE_URL || "";
+const SUPABASE_KEY = process.env.SUPABASE_KEY || "";
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+const SERPAPI_KEY = process.env.SERPAPI_KEY || "";
+const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || "text-embedding-3-small";
+
+// ===== App =====
 const app = express();
 
-const USER = process.env.SITE_USER || "user";
-const PASS = process.env.SITE_PASSWORD || "";
-
-// ---- BASIC AUTH (runs before anything else) ----
+// ---- NEW: browser popup Basic Auth (before everything else) ----
 app.use((req, res, next) => {
-  if (!PASS) {
-    // If you forgot to set SITE_PASSWORD on Render, fail closed so it's obvious.
-    res.set("Content-Type", "text/plain");
-    return res.status(500).send("Server not configured: SITE_PASSWORD is missing.");
-  }
-
+  if (!BASIC_PASS) return next(); // if not configured, skip
   const auth = req.headers.authorization || "";
   if (!auth.startsWith("Basic ")) {
     res.set("WWW-Authenticate", 'Basic realm="fr8coach"');
     return res.status(401).send("Authentication required.");
   }
-
   try {
-    // Decode "Basic base64(user:pass)"
-    const decoded = Buffer.from(auth.split(" ")[1], "base64").toString("utf8");
-    const i = decoded.indexOf(":");
-    const user = i >= 0 ? decoded.slice(0, i) : "";
-    const pass = i >= 0 ? decoded.slice(i + 1) : "";
-    if (user === USER && pass === PASS) return next();
+    const [user, pass] = Buffer.from(auth.split(" ")[1], "base64").toString().split(":");
+    if (user === BASIC_USER && pass === BASIC_PASS) return next();
   } catch {}
-
   res.set("WWW-Authenticate", 'Basic realm="fr8coach"');
   return res.status(401).send("Authentication required.");
 });
 
-// ---- STATIC FILES (do not change your site) ----
-app.use(express.static(path.join(__dirname, "public"), { extensions: ["html"] }));
+// ---- existing middleware ----
+app.use(cors());
+app.use(express.json());
+app.use(express.static(path.join(__dirname, "public")));
 
-// ---- HOMEPAGE (/) -> public/index.html ----
-app.get("/", (_req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
+const supabase = (SUPABASE_URL && SUPABASE_KEY)
+  ? createClient(SUPABASE_URL, SUPABASE_KEY)
+  : null;
+
+const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
+
+// ===== Health check =====
+app.get("/api/ping", (_req, res) => res.json({ ok: true, message: "pong" }));
+
+// Gate non-admin /api routes with SITE_PASSWORD header
+app.use("/api", (req, res, next) => {
+  if (req.path === "/ping") return next();
+  if (req.path.startsWith("/admin/")) return next();
+  if (req.headers["x-site-password"] !== BASIC_PASS) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  next();
 });
 
-// Optional clean routes (only if these files exist)
-app.get("/admin", (_req, res) => {
-  res.sendFile(path.join(__dirname, "public", "admin.html"));
-});
-app.get("/sales", (_req, res) => {
-  res.sendFile(path.join(__dirname, "public", "sales.html"));
-});
-app.get("/ops", (_req, res) => {
-  res.sendFile(path.join(__dirname, "public", "ops.html"));
-});
-
-// 404
-app.use((_req, res) => res.status(404).send("Not found"));
-
-const port = process.env.PORT || 10000;
-app.listen(port, () => console.log(`fr8coach running on ${port}`));
+// ===== Admin AUTH helpers =====
+function normalizeSecret(s) {
+  if (typeof s !== "string") return "";
+  return s.replace(/^["']|["']$/g, "").normalize("NFKC").trim();
+}
+const ADMIN_SECRET = normalizeSecret(ADMIN_PASSWORD || "");
+function timingSafeEqualAtoB(a, b) {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
+function isAdminAuthorized(req) {
+  const hdr = normalizeSecret(req.headers["x-admin-password"] || "");
+  if (
