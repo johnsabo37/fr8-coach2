@@ -1,19 +1,14 @@
 {
   "name": "fr8coach",
+  "private": true,
   "version": "1.0.0",
-  "description": "Private freight coaching tool",
-  "main": "server.js",
-  "type": "commonjs",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.45.1",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "js-yaml": "^4.1.0",
-    "multer": "^1.4.5-lts.1",
-    "openai": "^4.56.0"
+    "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
