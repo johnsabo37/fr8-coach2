@@ -1,36 +1,256 @@
 <!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <title>fr8coach</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <style>
-      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin:0; padding:24px; }
-      .wrap { max-width: 920px; margin: 6vh auto; }
-      h1 { margin: 0 0 12px; }
-      .card { border:1px solid #ddd; border-radius:12px; padding:16px; }
-      .links a { display:inline-block; margin-right:8px; margin-top:12px; padding:10px 14px; border-radius:8px; background:#111; color:#fff; text-decoration:none; }
-      #bot { margin-top:16px; min-height:360px; border:1px dashed #bbb; border-radius:12px; padding:12px; }
-    </style>
-  </head>
-  <body>
-    <div class="wrap">
-      <h1>fr8coach</h1>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Fr8Coach (Private)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { color-scheme: dark; }
+    @font-face {
+      font-family: "Aptos Mono";
+      src: url("/fonts/aptos-mono.woff2") format("woff2");
+      font-weight: 100 900;
+      font-style: normal;
+      font-display: swap;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin:0;
+      font-family: "Aptos Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      background:#0b1220; color:#e6edf3; font-size:14px;
+    }
 
-      <!-- === Paste your coach bot EMBED inside the #bot div === -->
-      <div id="bot">
-        <p><strong>Coach bot goes here.</strong></p>
-        <p>When you have the embed code (iframe/script), paste it here and remove this placeholder.</p>
+    /* Gate */
+    #gate { position: fixed; inset:0; display:flex; align-items:center; justify-content:center;
+      background: radial-gradient(1200px 800px at 50% -10%, #0f1730, #0b1220 60%, #0b1220); padding:24px; }
+    .gate-card { width:100%; max-width:460px; background:#0f1730; border:1px solid #223; border-radius:14px; padding:22px; box-shadow:0 10px 30px rgba(0,0,0,.35); }
+    .gate-card h1 { margin:0 0 10px; font-size:20px; font-weight:700; }
+    .row { display:flex; gap:10px; margin-top:12px; }
+    input, button, textarea { border-radius:10px; border:1px solid #334; background:#0b1220; color:#e6edf3; padding:10px 12px; font-size:14px; font-family:inherit; }
+    input:focus, textarea:focus { outline:2px solid #2b3f7d; }
+    button { cursor:pointer; background:#1a2a4a; border-color:#2a3a66; }
+    button:hover { background:#20345e; }
+    .muted { opacity:.8; font-size:12px; }
+
+    /* App */
+    #app { display:none; }
+    .wrap { max-width:1000px; margin:32px auto 120px; padding:0 16px; }
+    .center-title { text-align:center; margin-bottom:20px; }
+    h1 { font-size:28px; margin:0 0 8px; font-weight:700; }
+    .topbar { position:sticky; top:0; z-index:10; background:rgba(11,18,32,.9); backdrop-filter:blur(6px); border-bottom:1px solid #223; padding:10px 16px; display:flex; gap:10px; align-items:center; }
+    .spacer { flex:1; }
+    .danger { background:#5b2230; border-color:#7a2d3d; }
+    .danger:hover { background:#6a2a39; }
+
+    /* Chat */
+    .chat { background:#0f1730; border:1px solid #334; border-radius:12px; padding:12px; margin-bottom: 30px; }
+    .chat-controls { margin-bottom:8px; }
+    .messages { max-height:480px; overflow:auto; padding:6px; display:flex; flex-direction:column; gap:12px; background:#0c1326; border:1px solid #26304f; border-radius:8px; }
+    .msg { display:flex; gap:10px; }
+    .msg.bot  { justify-content:flex-start; }
+    .msg.user { justify-content:flex-end; }
+    .bubble { padding:10px 12px; border-radius:12px; max-width:100%; white-space:pre-wrap; line-height:1.5; font-size:14px; }
+    .msg.user .bubble { background:#1d3a72; border:1px solid #2a4a86; }
+    .msg.bot  .bubble { background:#13223f; border:1px solid #2b3f7d; }
+    .composer { margin-bottom:10px; display:flex; gap:10px; }
+    .composer textarea { flex:1; min-height:110px; resize:vertical; line-height:1.5; font-size:14px; }
+    .composer-buttons { display:flex; flex-direction:column; gap:10px; }
+
+    /* Links row */
+    .links { display:flex; gap:12px; margin-top:8px; }
+    .link-card { display:inline-block; padding:10px 14px; border-radius:10px; background:#111a2e; border:1px solid #223; text-decoration:none; color:#e6edf3; }
+    .link-card:hover { background:#162341; }
+  </style>
+</head>
+<body>
+
+  <!-- Password Gate -->
+  <section id="gate">
+    <div class="gate-card">
+      <h1>Enter Site Password</h1>
+      <p class="muted">This private coach is restricted. Enter the shared site password to continue.</p>
+      <div class="row">
+        <input id="pw" type="password" placeholder="Site password" style="flex:1" />
+        <button id="enter">Enter</button>
+      </div>
+      <p id="gate-msg" class="muted" style="margin-top:10px;"></p>
+    </div>
+  </section>
+
+  <!-- App -->
+  <section id="app">
+    <div class="topbar">
+      <span class="spacer"></span>
+      <button id="changePw" class="danger" title="Clear saved password to lock the site">Lock</button>
+    </div>
+
+    <div class="wrap">
+      <div class="center-title">
+        <h1>Fr8Coach</h1>
+        <p class="muted">your personal ai freight-bot , powered by XXX</p>
       </div>
 
-      <div class="card" style="margin-top:16px">
-        <p>Links:</p>
-        <div class="links">
-          <a href="/admin">Admin</a>
-          <a href="/ops">Ops</a>
-          <a href="/sales">Sales</a>
+      <!-- Chat card: composer FIRST, then transcript -->
+      <div class="chat">
+        <div class="chat-controls">
+          <span id="status" class="muted"></span>
         </div>
+
+        <div class="composer">
+          <textarea id="q" placeholder="Ask the Coach a question...
+ex) what is a good social selling strategy to help get set up with Home Depot?
+ex) send me leads"></textarea>
+          <div class="composer-buttons">
+            <button id="ask">Send</button>
+            <button id="clearChat" class="secondary">Clear Conversation</button>
+          </div>
+        </div>
+
+        <div id="messages" class="messages"></div>
+      </div>
+
+      <!-- Links to cards pages -->
+      <div class="links">
+        <a class="link-card" href="/sales.html">Sales Cards →</a>
+        <a class="link-card" href="/ops.html">Ops Cards →</a>
       </div>
     </div>
-  </body>
+  </section>
+
+  <script>
+    // ---------- Password gate logic (uses /api/ping) ----------
+    const gate = document.getElementById('gate');
+    const app  = document.getElementById('app');
+    const pwIn = document.getElementById('pw');
+    const gateMsg = document.getElementById('gate-msg');
+
+    (function initGate(){
+      const saved = localStorage.getItem('FR8COACH_PW');
+      if (saved) {
+        tryProtected(saved).then(ok => { if (ok) unlock(saved); else showGate(); }).catch(()=> showGate());
+      } else { showGate(); }
+    })();
+
+    function showGate(msg){
+      gate.style.display = 'flex';
+      app.style.display  = 'none';
+      gateMsg.textContent = msg || '';
+      setTimeout(()=> pwIn.focus(), 50);
+    }
+
+    async function tryProtected(pw){
+      try {
+        // Use /api/ping so we only test auth (not data fetch)
+        const r = await fetch('/api/ping', { headers: { 'x-site-password': pw } });
+        return r.status !== 401; // true if accepted
+      } catch { return false; }
+    }
+
+    async function unlock(pw){
+      localStorage.setItem('FR8COACH_PW', pw);
+      gate.style.display = 'none';
+      app.style.display  = 'block';
+      restoreChatFromStorage();
+    }
+
+    document.getElementById('enter').onclick = async () => {
+      const pw = (pwIn.value || '').trim();
+      if (!pw) { gateMsg.textContent = 'Please enter the site password.'; return; }
+      gateMsg.textContent = 'Checking…';
+      const ok = await tryProtected(pw);
+      if (ok) unlock(pw); else { gateMsg.textContent = 'Password incorrect. Try again.'; pwIn.select(); }
+    };
+
+    document.getElementById('changePw').onclick = () => {
+      localStorage.removeItem('FR8COACH_PW');
+      showGate('Locked. Enter the site password to continue.');
+    };
+
+    // ---------- Shared helpers ----------
+    function savedPW(){ return localStorage.getItem('FR8COACH_PW') || ''; }
+    async function api(path, opts = {}) {
+      const headers = Object.assign({ 'Content-Type':'application/json', 'x-site-password': savedPW() }, opts.headers || {});
+      const r = await fetch(path, Object.assign({}, opts, { headers }));
+      if (!r.ok) {
+        const txt = await r.text().catch(()=> '');
+        throw new Error(`HTTP ${r.status}${txt ? ' – ' + txt : ''}`);
+      }
+      return r.json();
+    }
+
+    // ---------- Chat UI ----------
+    const messagesEl = document.getElementById('messages');
+    const qEl = document.getElementById('q');
+    const askBtn = document.getElementById('ask');
+    const clearBtn = document.getElementById('clearChat');
+    const statusEl = document.getElementById('status');
+
+    function appendMessage(role, text) {
+      const row = document.createElement('div');
+      row.className = 'msg ' + (role === 'user' ? 'user' : 'bot');
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.textContent = text;
+      row.appendChild(bubble);
+      messagesEl.appendChild(row);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function historyFromDom(limit = 8) {
+      const items = Array.from(messagesEl.querySelectorAll('.msg')).slice(-limit*2);
+      return items.map(n => {
+        const role = n.classList.contains('user') ? 'user' : 'assistant';
+        const content = n.querySelector('.bubble')?.textContent || '';
+        return { role, content };
+      });
+    }
+
+    function saveChatToStorage() {
+      const hist = historyFromDom(50);
+      localStorage.setItem('FR8COACH_CHAT', JSON.stringify(hist));
+    }
+
+    function restoreChatFromStorage() {
+      messagesEl.innerHTML = '';
+      try {
+        const raw = localStorage.getItem('FR8COACH_CHAT');
+        if (!raw) return;
+        const hist = JSON.parse(raw);
+        (hist || []).forEach(m => appendMessage(m.role === 'assistant' ? 'bot' : 'user', m.content));
+      } catch {}
+    }
+
+    function clearConversation() {
+      messagesEl.innerHTML = '';
+      localStorage.removeItem('FR8COACH_CHAT');
+      statusEl.textContent = 'Conversation cleared.';
+      qEl.focus();
+    }
+    clearBtn.onclick = clearConversation;
+
+    askBtn.onclick = async () => {
+      const prompt = qEl.value.trim();
+      if (!prompt) return;
+      const pw = savedPW();
+      if (!pw) { statusEl.textContent = 'Locked: enter the site password.'; return; }
+
+      appendMessage('user', prompt);
+      qEl.value = '';
+      statusEl.textContent = 'Thinking…';
+
+      try {
+        const hist = historyFromDom(8);
+        const data = await api('/api/coach', { method: 'POST', body: JSON.stringify({ prompt, history: hist }) });
+        appendMessage('bot', (data && data.reply) ? data.reply : JSON.stringify(data, null, 2));
+        statusEl.textContent = '';
+        saveChatToStorage();
+      } catch (e) {
+        appendMessage('bot', 'Error: ' + e.message);
+        statusEl.textContent = 'Failed.';
+      }
+    };
+  </script>
+  <!-- IMPORTANT: remove conflicting auth scripts -->
+  <!-- (No <script src="/auth-gate.js"> or /auth-gate-robust.js here) -->
+</body>
 </html>
