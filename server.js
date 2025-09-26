@@ -14,8 +14,8 @@ const OpenAI = require("openai");
 
 // ===== Env =====
 const PORT = process.env.PORT || 10000;
-const SITE_USER = process.env.SITE_USER || "user";        // NEW: Basic Auth username
-const SITE_PASSWORD = process.env.SITE_PASSWORD || "";    // used by Basic Auth AND x-site-password gate
+const SITE_USER = process.env.SITE_USER || "user";        // Basic Auth username
+const SITE_PASSWORD = process.env.SITE_PASSWORD || "";    // Basic Auth password
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";  // separate admin secret
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_KEY = process.env.SUPABASE_KEY || "";
@@ -27,10 +27,9 @@ const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || "text-embedding-3-small";
 const app = express();
 
 /** ------------------------------------------------------------------
- *  NEW: Site-wide Basic Auth (browser popup) BEFORE everything else.
- *  - Does NOT change your APIs or bot logic.
- *  - Uses SITE_USER / SITE_PASSWORD from Environment.
- *  - If SITE_PASSWORD is empty, this layer is skipped.
+ *  Browser popup (Basic Auth) BEFORE everything else.
+ *  Uses SITE_USER / SITE_PASSWORD.
+ *  If SITE_PASSWORD is empty, this layer is skipped.
  * ------------------------------------------------------------------ */
 app.use((req, res, next) => {
   if (!SITE_PASSWORD) return next(); // skip if not configured
@@ -64,15 +63,14 @@ const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 // Health
 app.get("/api/ping", (_req, res) => res.json({ ok: true, message: "pong" }));
 
-// Gate non-admin /api routes with SITE_PASSWORD (header is set by your page code)
-app.use("/api", (req, res, next) => {
-  if (req.path === "/ping") return next();
-  if (req.path.startsWith("/admin/")) return next(); // admin handled by separate auth below
-  if (req.headers["x-site-password"] !== SITE_PASSWORD) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-  next();
-});
+/** ------------------------------------------------------------------
+ *  IMPORTANT CHANGE:
+ *  We REMOVED the old /api header gate that required 'x-site-password'.
+ *  With Basic Auth now protecting the whole site, the APIs should not
+ *  return 401 for normal users. This prevents your page from showing
+ *  its in-page password modal.
+ * ------------------------------------------------------------------ */
+// (No app.use("/api", ...) password check anymore)
 
 // ===== Admin AUTH helpers =====
 function normalizeSecret(s) {
@@ -158,7 +156,7 @@ function wantsContacts(q = "") {
     // extra useful variants
     /\blogistics (?:manager|director|head)s?\b/,
     /\bcarrier (?:manager|relations|procurement)\b/,
-    /\bvender|vendor (?:manager|relations)\b/ // small catch-all (typos/vendor)
+    /\bvender|vendor (?:manager|relations)\b/
   ];
 
   return patterns.some(re => re.test(s));
